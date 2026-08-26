@@ -21,6 +21,23 @@ namespace {
 
 constexpr std::string_view version = "0.1.0";
 
+struct Options {
+  std::filesystem::path input_path;
+  std::optional<std::filesystem::path> output_path;
+  std::vector<std::filesystem::path> module_paths;
+  bool dump_llvm = false;
+};
+
+struct CheckedProgram {
+  std::vector<termis::FormPtr> forms;
+  termis::Program program;
+};
+
+struct ParseResult {
+  std::optional<Options> options;
+  int exit_code = EXIT_SUCCESS;
+};
+
 void print_help(std::ostream& out) {
   out << "Usage: termisc [OPTIONS] <input.termis>\n"
       << "\n"
@@ -211,135 +228,160 @@ bool append_module_path(std::vector<termis::FormPtr>& destination,
   return true;
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
+ParseResult parse_options(int argc, char** argv, std::ostream& err) {
   if (argc == 1) {
-    print_help(std::cerr);
-    return EXIT_FAILURE;
+    print_help(err);
+    return ParseResult{std::nullopt, EXIT_FAILURE};
   }
 
-  std::string_view input_path;
-  std::optional<std::filesystem::path> output_path;
-  std::vector<std::filesystem::path> module_paths;
-  bool dump_llvm = false;
+  Options options;
+  bool has_input = false;
 
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
 
     if (arg == "-h" || arg == "--help") {
       print_help(std::cout);
-      return EXIT_SUCCESS;
+      return ParseResult{std::nullopt, EXIT_SUCCESS};
     }
 
     if (arg == "--version") {
       print_version(std::cout);
-      return EXIT_SUCCESS;
+      return ParseResult{std::nullopt, EXIT_SUCCESS};
     }
 
     if (arg == "--dump-llvm") {
-      dump_llvm = true;
+      options.dump_llvm = true;
       continue;
     }
 
     if (arg == "-I" || arg == "--module-path") {
       if (i + 1 >= argc) {
-        std::cerr << "termisc: " << arg << " requires a path\n";
-        return EXIT_FAILURE;
+        err << "termisc: " << arg << " requires a path\n";
+        return ParseResult{std::nullopt, EXIT_FAILURE};
       }
-      module_paths.emplace_back(argv[++i]);
+      options.module_paths.emplace_back(argv[++i]);
       continue;
     }
 
     if (arg == "-o" || arg == "--output") {
       if (i + 1 >= argc) {
-        std::cerr << "termisc: " << arg << " requires a path\n";
-        return EXIT_FAILURE;
+        err << "termisc: " << arg << " requires a path\n";
+        return ParseResult{std::nullopt, EXIT_FAILURE};
       }
-      output_path = argv[++i];
+      options.output_path = argv[++i];
       continue;
     }
 
     if (!arg.empty() && arg.front() == '-') {
-      std::cerr << "termisc: unknown option: " << arg << '\n';
-      return EXIT_FAILURE;
+      err << "termisc: unknown option: " << arg << '\n';
+      return ParseResult{std::nullopt, EXIT_FAILURE};
     }
 
-    if (!input_path.empty()) {
-      std::cerr << "termisc: expected one input file\n";
-      return EXIT_FAILURE;
+    if (has_input) {
+      err << "termisc: expected one input file\n";
+      return ParseResult{std::nullopt, EXIT_FAILURE};
     }
 
-    input_path = arg;
+    options.input_path = arg;
+    has_input = true;
   }
 
-  if (input_path.empty()) {
-    std::cerr << "termisc: expected an input file\n";
-    return EXIT_FAILURE;
+  if (!has_input) {
+    err << "termisc: expected an input file\n";
+    return ParseResult{std::nullopt, EXIT_FAILURE};
   }
 
-  const auto input_source = read_file(std::string(input_path));
+  return ParseResult{std::move(options), EXIT_SUCCESS};
+}
+
+std::optional<std::vector<termis::FormPtr>> load_forms(const Options& options, std::ostream& err) {
+  std::vector<termis::FormPtr> forms;
+  for (const auto& module_path : options.module_paths) {
+    if (!append_module_path(forms, module_path, err)) {
+      return std::nullopt;
+    }
+  }
+
+  const auto input_source = read_file(options.input_path);
   if (!input_source.has_value()) {
-    std::cerr << "termisc: unable to open input file: " << input_path << '\n';
-    return EXIT_FAILURE;
+    err << "termisc: unable to open input file: " << options.input_path << '\n';
+    return std::nullopt;
   }
+  if (!append_module_forms(forms, termis::read_forms(*input_source), err)) {
+    return std::nullopt;
+  }
+  return forms;
+}
+
+CheckedProgram analyze_and_check_layout(std::vector<termis::FormPtr> forms) {
+  auto program = termis::analyze_forms(forms);
+  termis::LayoutEngine layout_engine(program.types);
+  for (const auto& declaration : program.types.declarations()) {
+    if (declaration.parameters.empty()) {
+      (void)layout_engine.compute(*declaration.body);
+    }
+  }
+  return CheckedProgram{std::move(forms), std::move(program)};
+}
+
+bool emit_output(const Options& options, const termis::Program& program, std::ostream& out, std::ostream& err) {
+  if (options.dump_llvm) {
+    out << termis::emit_llvm_ir(program);
+    return true;
+  }
+
+  const auto object = termis::emit_object_file(program);
+  const auto binary_path = options.output_path.value_or("a.out");
+  if (!link_object_to_binary(object, binary_path, err)) {
+    return false;
+  }
+  out << "wrote " << binary_path << '\n';
+  return true;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  const auto parsed = parse_options(argc, argv, std::cerr);
+  if (!parsed.options.has_value()) {
+    return parsed.exit_code;
+  }
+  const auto& options = *parsed.options;
 
   try {
-    std::vector<termis::FormPtr> forms;
-    for (const auto& module_path : module_paths) {
-      if (!append_module_path(forms, module_path, std::cerr)) {
-        return EXIT_FAILURE;
-      }
-    }
-    if (!append_module_forms(forms, termis::read_forms(*input_source), std::cerr)) {
+    auto forms = load_forms(options, std::cerr);
+    if (!forms.has_value()) {
       return EXIT_FAILURE;
     }
 
-    const auto program = termis::analyze_forms(forms);
-    termis::LayoutEngine layout_engine(program.types);
-    std::size_t concrete_layouts = 0;
-    for (const auto& declaration : program.types.declarations()) {
-      if (declaration.parameters.empty()) {
-        (void)layout_engine.compute(*declaration.body);
-        ++concrete_layouts;
-      }
-    }
-
-    if (dump_llvm) {
-      std::cout << termis::emit_llvm_ir(program);
-    } else {
-      (void)forms;
-      (void)concrete_layouts;
-      const auto object = termis::emit_object_file(program);
-      const auto binary_path = output_path.value_or("a.out");
-      if (!link_object_to_binary(object, binary_path, std::cerr)) {
-        return EXIT_FAILURE;
-      }
-      std::cout << "wrote " << binary_path << '\n';
+    const auto checked = analyze_and_check_layout(std::move(*forms));
+    if (!emit_output(options, checked.program, std::cout, std::cerr)) {
+      return EXIT_FAILURE;
     }
   } catch (const termis::ReadError& error) {
     const auto& diagnostic = error.diagnostic();
-    std::cerr << input_path << ':' << diagnostic.location.line << ':'
+    std::cerr << options.input_path << ':' << diagnostic.location.line << ':'
               << diagnostic.location.column << ": reader error: " << diagnostic.message << '\n';
     return EXIT_FAILURE;
   } catch (const termis::SemanticError& error) {
     const auto& diagnostic = error.diagnostic();
-    std::cerr << input_path << ':' << diagnostic.location.line << ':'
+    std::cerr << options.input_path << ':' << diagnostic.location.line << ':'
               << diagnostic.location.column << ": semantic error: " << diagnostic.message << '\n';
     return EXIT_FAILURE;
   } catch (const termis::TypeError& error) {
     const auto& diagnostic = error.diagnostic();
-    std::cerr << input_path << ':' << diagnostic.location.line << ':'
+    std::cerr << options.input_path << ':' << diagnostic.location.line << ':'
               << diagnostic.location.column << ": type error: " << diagnostic.message << '\n';
     return EXIT_FAILURE;
   } catch (const termis::LayoutError& error) {
     const auto& diagnostic = error.diagnostic();
-    std::cerr << input_path << ':' << diagnostic.location.line << ':'
+    std::cerr << options.input_path << ':' << diagnostic.location.line << ':'
               << diagnostic.location.column << ": layout error: " << diagnostic.message << '\n';
     return EXIT_FAILURE;
   } catch (const termis::CodegenError& error) {
     const auto& diagnostic = error.diagnostic();
-    std::cerr << input_path << ':' << diagnostic.location.line << ':'
+    std::cerr << options.input_path << ':' << diagnostic.location.line << ':'
               << diagnostic.location.column << ": codegen error: " << diagnostic.message << '\n';
     return EXIT_FAILURE;
   }
