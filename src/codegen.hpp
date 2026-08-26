@@ -19,5 +19,6 @@ class CodegenError final : public std::runtime_error {
 };
 
 std::string emit_llvm_ir(const Program& program);
+std::string emit_object_file(const Program& program);
 
 }  // namespace termis

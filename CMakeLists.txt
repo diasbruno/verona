@@ -31,7 +31,7 @@ if(TERMIS_LLVM_CONFIG)
     OUTPUT_STRIP_TRAILING_WHITESPACE
     COMMAND_ERROR_IS_FATAL ANY)
   execute_process(
-    COMMAND ${TERMIS_LLVM_CONFIG} --libs core support
+    COMMAND ${TERMIS_LLVM_CONFIG} --libs core support nativecodegen target mc asmprinter
     OUTPUT_VARIABLE TERMIS_LLVM_LIBS
     OUTPUT_STRIP_TRAILING_WHITESPACE
     COMMAND_ERROR_IS_FATAL ANY)
@@ -50,7 +50,11 @@ if(TERMIS_LLVM_CONFIG)
 else()
   find_package(LLVM REQUIRED CONFIG)
   llvm_map_components_to_libnames(TERMIS_LLVM_LIBS
+    asmprinter
     core
+    mc
+    nativecodegen
+    target
     support)
   set(TERMIS_LLVM_INCLUDE_DIR "${LLVM_INCLUDE_DIRS}")
   set(TERMIS_LLVM_DEFINITIONS "${LLVM_DEFINITIONS}")
@@ -71,6 +75,11 @@ target_include_directories(termis_core SYSTEM PRIVATE
 
 target_compile_definitions(termis_core PRIVATE
   ${TERMIS_LLVM_DEFINITIONS})
+
+if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET)
+  target_compile_definitions(termis_core PRIVATE
+    TERMIS_MACOS_DEPLOYMENT_TARGET="${CMAKE_OSX_DEPLOYMENT_TARGET}")
+endif()
 
 if(TERMIS_LLVM_LIBRARY_DIR)
   target_link_directories(termis_core PUBLIC

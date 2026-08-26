@@ -50,41 +50,41 @@ std::string shell_quote(std::string_view value) {
   return quoted;
 }
 
-std::filesystem::path make_temporary_ir_path() {
+std::filesystem::path make_temporary_object_path() {
   const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
   const auto directory = std::filesystem::temp_directory_path();
   for (int attempt = 0; attempt < 100; ++attempt) {
     auto path = directory / ("termis-" + std::to_string(now) + "-" +
-                             std::to_string(attempt) + ".ll");
+                             std::to_string(attempt) + ".o");
     if (!std::filesystem::exists(path)) {
       return path;
     }
   }
-  return directory / ("termis-" + std::to_string(now) + ".ll");
+  return directory / ("termis-" + std::to_string(now) + ".o");
 }
 
-bool compile_ir_to_binary(std::string_view ir,
-                          const std::filesystem::path& output_path,
-                          std::ostream& err) {
-  const auto ir_path = make_temporary_ir_path();
+bool link_object_to_binary(std::string_view object,
+                           const std::filesystem::path& output_path,
+                           std::ostream& err) {
+  const auto object_path = make_temporary_object_path();
   {
-    std::ofstream ir_file{ir_path};
-    if (!ir_file) {
-      err << "termisc: unable to write temporary LLVM IR: " << ir_path << '\n';
+    std::ofstream object_file{object_path, std::ios::binary};
+    if (!object_file) {
+      err << "termisc: unable to write temporary object file: " << object_path << '\n';
       return false;
     }
-    ir_file << ir;
+    object_file.write(object.data(), static_cast<std::streamsize>(object.size()));
   }
 
-  const auto command = "clang++ " + shell_quote(ir_path.string()) + " -o " +
+  const auto command = "clang++ " + shell_quote(object_path.string()) + " -o " +
                        shell_quote(output_path.string());
   const int status = std::system(command.c_str());
 
   std::error_code remove_error;
-  std::filesystem::remove(ir_path, remove_error);
+  std::filesystem::remove(object_path, remove_error);
 
   if (status != 0) {
-    err << "termisc: LLVM compiler failed while producing " << output_path << '\n';
+    err << "termisc: linker failed while producing " << output_path << '\n';
     return false;
   }
   return true;
@@ -310,9 +310,9 @@ int main(int argc, char** argv) {
     } else {
       (void)forms;
       (void)concrete_layouts;
-      const auto ir = termis::emit_llvm_ir(program);
+      const auto object = termis::emit_object_file(program);
       const auto binary_path = output_path.value_or("a.out");
-      if (!compile_ir_to_binary(ir, binary_path, std::cerr)) {
+      if (!link_object_to_binary(object, binary_path, std::cerr)) {
         return EXIT_FAILURE;
       }
       std::cout << "wrote " << binary_path << '\n';

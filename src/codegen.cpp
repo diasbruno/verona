@@ -1,16 +1,25 @@
 #include "codegen.hpp"
 
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/CodeGen.h>
+#include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/Triple.h>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -639,16 +648,53 @@ const Diagnostic& CodegenError::diagnostic() const {
   return diagnostic_;
 }
 
-std::string emit_llvm_ir(const Program& program) {
-  llvm::LLVMContext context;
-  llvm::Module module("termis", context);
+namespace {
+
+llvm::TargetMachine& native_target_machine() {
+  static const bool initialized = [] {
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    return true;
+  }();
+  (void)initialized;
+
+  llvm::Triple triple(llvm::sys::getDefaultTargetTriple());
+#ifdef TERMIS_MACOS_DEPLOYMENT_TARGET
+  if (triple.isMacOSX()) {
+    triple.setOSName("macosx" TERMIS_MACOS_DEPLOYMENT_TARGET);
+  }
+#endif
+  const auto target_triple = triple.str();
+  std::string target_error;
+  const auto* target = llvm::TargetRegistry::lookupTarget(target_triple, target_error);
+  if (target == nullptr) {
+    fail(SourceLocation{}, "unable to find LLVM target: " + target_error);
+  }
+
+  llvm::TargetOptions options;
+  static std::unique_ptr<llvm::TargetMachine> target_machine{
+      target->createTargetMachine(triple, "generic", "", options, std::nullopt)};
+  if (target_machine == nullptr) {
+    fail(SourceLocation{}, "unable to create LLVM target machine");
+  }
+  return *target_machine;
+}
+
+std::unique_ptr<llvm::Module> emit_module(llvm::LLVMContext& context,
+                                          const Program& program,
+                                          llvm::TargetMachine* target_machine = nullptr) {
+  auto module = std::make_unique<llvm::Module>("termis", context);
+  if (target_machine != nullptr) {
+    module->setTargetTriple(target_machine->getTargetTriple());
+    module->setDataLayout(target_machine->createDataLayout());
+  }
   llvm::IRBuilder<> builder(context);
 
   std::unordered_map<std::string, FunctionSignature> functions;
   for (const auto& node : program.forms) {
     switch (node->kind) {
       case SemanticKind::function_declaration: {
-        auto signature = parse_signature(context, module, *node->form, program.types);
+        auto signature = parse_signature(context, *module, *node->form, program.types);
         if (functions.contains(signature.name)) {
           fail(node->form->location, "function redefines existing function");
         }
@@ -657,7 +703,7 @@ std::string emit_llvm_ir(const Program& program) {
       }
 
       case SemanticKind::extern_function_declaration: {
-        auto signature = parse_extern_signature(context, module, *node->form, program.types);
+        auto signature = parse_extern_signature(context, *module, *node->form, program.types);
         if (functions.contains(signature.name)) {
           fail(node->form->location, "function redefines existing function");
         }
@@ -678,14 +724,14 @@ std::string emit_llvm_ir(const Program& program) {
   }
 
   for (const auto& [_, signature] : functions) {
-    declare_function(module, signature);
+    declare_function(*module, signature);
   }
 
   for (const auto& node : program.forms) {
     switch (node->kind) {
       case SemanticKind::function_declaration: {
-        const auto signature = parse_signature(context, module, *node->form, program.types);
-        FunctionEmitter emitter(context, module, builder, functions, functions.at(signature.name));
+        const auto signature = parse_signature(context, *module, *node->form, program.types);
+        FunctionEmitter emitter(context, *module, builder, functions, functions.at(signature.name));
         emitter.emit(*node->form);
         break;
       }
@@ -707,16 +753,41 @@ std::string emit_llvm_ir(const Program& program) {
 
   std::string verifier_errors;
   llvm::raw_string_ostream verifier_stream(verifier_errors);
-  if (llvm::verifyModule(module, &verifier_stream)) {
+  if (llvm::verifyModule(*module, &verifier_stream)) {
     verifier_stream.flush();
     fail(SourceLocation{}, "generated invalid LLVM IR: " + verifier_errors);
   }
 
+  return module;
+}
+
+}  // namespace
+
+std::string emit_llvm_ir(const Program& program) {
+  llvm::LLVMContext context;
+  const auto module = emit_module(context, program);
+
   std::string ir;
   llvm::raw_string_ostream stream(ir);
-  module.print(stream, nullptr);
+  module->print(stream, nullptr);
   stream.flush();
   return ir;
+}
+
+std::string emit_object_file(const Program& program) {
+  llvm::LLVMContext context;
+  auto& target_machine = native_target_machine();
+  auto module = emit_module(context, program, &target_machine);
+
+  llvm::SmallVector<char, 0> object_buffer;
+  llvm::raw_svector_ostream stream(object_buffer);
+  llvm::legacy::PassManager pass_manager;
+  if (target_machine.addPassesToEmitFile(pass_manager, stream, nullptr, llvm::CodeGenFileType::ObjectFile)) {
+    fail(SourceLocation{}, "LLVM target does not support object emission");
+  }
+  pass_manager.run(*module);
+
+  return std::string(object_buffer.begin(), object_buffer.end());
 }
 
 }  // namespace termis
