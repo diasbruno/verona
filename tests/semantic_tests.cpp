@@ -29,6 +29,18 @@ void recognizes_core_forms() {
     (do .)
     (match value (_ .))
     (const size 42)
+    (class Eq (T)
+      (fn eq
+        ((params ((left T) (right T)))
+         (return bool)
+         (requires ())
+         (documentation "Compare two values for equality."))))
+    (implements Eq (i64)
+      (fn eq
+        ((params ((left i64) (right i64)))
+         (return bool)
+         (requires ()))
+        (= left right)))
     (+ 1 2)
     (call ok 1 0)
     ()
@@ -37,7 +49,7 @@ void recognizes_core_forms() {
     42
   )");
 
-  require(program.forms.size() == 13, "expected thirteen semantic forms");
+  require(program.forms.size() == 15, "expected fifteen semantic forms");
   require(program.forms[0]->kind == termis::SemanticKind::type_declaration,
           "expected type declaration");
   require(program.forms[1]->kind == termis::SemanticKind::function_declaration,
@@ -52,17 +64,21 @@ void recognizes_core_forms() {
           "expected match expression");
   require(program.forms[6]->kind == termis::SemanticKind::const_declaration,
           "expected const declaration");
-  require(program.forms[7]->kind == termis::SemanticKind::application,
+  require(program.forms[7]->kind == termis::SemanticKind::class_declaration,
+          "expected class declaration");
+  require(program.forms[8]->kind == termis::SemanticKind::implements_declaration,
+          "expected implements declaration");
+  require(program.forms[9]->kind == termis::SemanticKind::application,
           "expected application");
-  require(program.forms[8]->kind == termis::SemanticKind::application,
+  require(program.forms[10]->kind == termis::SemanticKind::application,
           "expected call to be an application");
-  require(program.forms[9]->kind == termis::SemanticKind::list_expression,
-          "expected empty list expression");
-  require(program.forms[10]->kind == termis::SemanticKind::list_expression,
-          "expected list-headed list expression");
   require(program.forms[11]->kind == termis::SemanticKind::list_expression,
+          "expected empty list expression");
+  require(program.forms[12]->kind == termis::SemanticKind::list_expression,
+          "expected list-headed list expression");
+  require(program.forms[13]->kind == termis::SemanticKind::list_expression,
           "expected non-symbol-headed list expression");
-  require(program.forms[12]->kind == termis::SemanticKind::atom,
+  require(program.forms[14]->kind == termis::SemanticKind::atom,
           "expected atom");
 }
 
@@ -113,6 +129,110 @@ void collects_type_declarations() {
   const auto* pair = program.types.find("Pair");
   require(pair != nullptr, "expected Pair declaration");
   require(pair->parameters.size() == 2, "expected Pair parameters");
+}
+
+void collects_class_declarations_and_implementations() {
+  auto program = analyze(R"(
+    (class Eq (T)
+      (fn eq
+        ((params ((left T) (right T)))
+         (return bool)
+         (requires ())
+         (documentation "Compare two values for equality."))))
+    (class Ord (T)
+      (fn lt
+        ((params ((left T) (right T)))
+         (return bool)
+         (requires ((Eq T))))))
+    (implements Eq (i64)
+      (fn eq
+        ((params ((left i64) (right i64)))
+         (return bool)
+         (requires ()))
+        (= left right)))
+  )");
+
+  require(program.classes.size() == 2, "expected two class declarations");
+  const auto* eq = program.classes.find("Eq");
+  require(eq != nullptr, "expected Eq class");
+  require(eq->parameters.size() == 1, "expected Eq type parameter");
+  require(eq->methods.size() == 1, "expected Eq method");
+  require(eq->methods[0].name == "eq", "expected eq method");
+  require(eq->methods[0].documentation == "Compare two values for equality.",
+          "expected Eq method documentation");
+  const auto* ord = program.classes.find("Ord");
+  require(ord != nullptr, "expected Ord class");
+  require(ord->methods[0].requirements.size() == 1, "expected Ord method requirement");
+  require(ord->methods[0].requirements[0].class_name == "Eq", "expected Eq requirement");
+  require(program.classes.implementations().size() == 1, "expected one implementation");
+  require(program.classes.implementations()[0].class_name == "Eq", "expected Eq implementation");
+}
+
+void rejects_unknown_implements_class() {
+  try {
+    (void)analyze(R"(
+      (implements Eq (i64)
+        (fn eq
+        ((params ((left i64) (right i64)))
+         (return bool)
+         (requires ()))
+        (= left right)))
+    )");
+  } catch (const termis::SemanticError& error) {
+    require(error.diagnostic().message == "implements references unknown class",
+            "expected unknown class diagnostic");
+    return;
+  }
+
+  require(false, "expected unknown class failure");
+}
+
+void rejects_missing_implements_methods() {
+  try {
+    (void)analyze(R"(
+      (class Eq (T)
+        (fn eq
+        ((params ((left T) (right T)))
+         (return bool)
+         (requires ()))))
+      (implements Eq (i64)
+        (fn other
+        ((params ((left i64) (right i64)))
+         (return bool)
+         (requires ()))
+        true))
+    )");
+  } catch (const termis::SemanticError& error) {
+    require(error.diagnostic().message == "implements is missing class method",
+            "expected missing method diagnostic");
+    return;
+  }
+
+  require(false, "expected missing method failure");
+}
+
+void rejects_mismatched_implements_method_signatures() {
+  try {
+    (void)analyze(R"(
+      (class Eq (T)
+        (fn eq
+        ((params ((left T) (right T)))
+         (return bool)
+         (requires ()))))
+      (implements Eq (i64)
+        (fn eq
+        ((params ((left i32) (right i64)))
+         (return bool)
+         (requires ()))
+        true))
+    )");
+  } catch (const termis::SemanticError& error) {
+    require(error.diagnostic().message == "implements method signature does not match class method",
+            "expected mismatched method diagnostic");
+    return;
+  }
+
+  require(false, "expected mismatched method failure");
 }
 
 void rejects_unknown_type_references() {
@@ -180,6 +300,10 @@ int main() {
   rejects_bad_type_body();
   accepts_empty_lists();
   collects_type_declarations();
+  collects_class_declarations_and_implementations();
+  rejects_unknown_implements_class();
+  rejects_missing_implements_methods();
+  rejects_mismatched_implements_method_signatures();
   rejects_unknown_type_references();
   rejects_missing_generic_arguments();
   rejects_bad_generic_argument_count();

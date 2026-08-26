@@ -27,17 +27,26 @@ It aims to combine a small and expressive syntax with predictable low-level memo
     None
     (Some T)))
 
-(fn unwrap-or ((value (Option i32))
-               (fallback i32))
-    i32
+(fn unwrap-or
+  ((params ((value (Option i32))
+            (fallback i32)))
+   (return i32)
+   (requires ())
+   (documentation "Return the contained value or a fallback."))
   (match value
     ((Some x) x)
     (None fallback)))
 
-(fn noop () unit
+(fn noop
+  ((params ())
+   (return unit)
+   (requires ()))
   .)
 
-(fn main () i32
+(fn main
+  ((params ())
+   (return i32)
+   (requires ()))
   (unwrap-or (Some 42) 0))
 ```
 
@@ -90,9 +99,9 @@ a symbol. These are the language forms currently recognized:
 (type name body)
 (type name (parameter*) body)
 
-(fn name ((parameter-name parameter-type)*) result-type body+)
-(extern fn name ((parameter-name parameter-type)*) result-type)
-(extern fn name ((parameter-name parameter-type)*) result-type "link-name")
+(fn name signature body+)
+(extern fn name signature)
+(extern fn name signature "link-name")
 
 (const name value)
 
@@ -108,10 +117,23 @@ a symbol. These are the language forms currently recognized:
 (list form*)
 ```
 
-`type`, `fn`, `extern`, `const`, `let`, `do`, and `match` are classified as
-special forms. Any other list headed by a symbol is an application. Empty lists,
-`(list ...)`, and lists whose first element is not a symbol are list expressions;
-they are parsed and classified but not yet lowered to LLVM.
+`type`, `class`, `implements`, `fn`, `extern`, `const`, `let`, `do`, and `match`
+are classified as special forms. Any other list headed by a symbol is an
+application. Empty lists, `(list ...)`, and lists whose first element is not a
+symbol are list expressions; they are parsed and classified but not yet lowered
+to LLVM.
+
+Function signatures are stable declaration lists with named fields:
+
+```lisp
+((params ((parameter-name parameter-type)*))
+ (return result-type)
+ (requires ((Class type*)*))
+ (documentation "optional documentation"))
+```
+
+`documentation` is optional. `params`, `return`, and `requires` are currently
+required so the declaration shape remains fixed as requirements evolve.
 
 The compiler frontend handles `module` and `import` before semantic analysis.
 `(module name ...)` unwraps and contributes its body forms. `(import name)` is
@@ -119,8 +141,10 @@ accepted as a module dependency marker and then skipped; module paths supplied
 with `-I`/`--module-path` decide which files are loaded.
 
 Code generation currently lowers top-level `type`, `fn`, and `extern fn`
-declarations. Top-level expressions and `const` declarations are recognized by
-semantic analysis but are not yet emitted. Function bodies currently lower:
+declarations. Top-level `class` and `implements` declarations are recognized by
+semantic analysis but are not yet emitted. Top-level expressions and `const`
+declarations are recognized by semantic analysis but are not yet emitted.
+Function bodies currently lower:
 
 ```text
 integer literals
@@ -230,7 +254,10 @@ None
 The unit type is `unit`, and its sole value is `.`:
 
 ```lisp
-(fn noop () unit
+(fn noop
+  ((params ())
+   (return unit)
+   (requires ()))
   .)
 ```
 
@@ -243,17 +270,17 @@ Termis source
     ↓
 S-expression reader
     ↓
-macro expansion
+module loading
     ↓
 semantic analysis
     ↓
-type checking
-    ↓
-typed IR
-    ↓
-lowering
+layout checking
     ↓
 LLVM IR
+    ↓
+LLVM object emission
+    ↓
+platform link
 ```
 
 The initial compiler executable is expected to be called `termisc`.
@@ -270,7 +297,10 @@ loaded explicitly with `-I`/`--module-path`; each path contributes every
 (module my/program
   (import std/data)
 
-  (fn main () i64
+  (fn main
+    ((params ())
+     (return i64)
+     (requires ()))
     42))
 ```
 
@@ -306,8 +336,19 @@ not imply length, ownership, encoding, or NUL termination.
 `std.memory` uses `Data` and target-sized integers for allocation sizes:
 
 ```lisp
-(extern fn allocate ((size usize)) Data "malloc")
-(extern fn free ((data Data)) unit "free")
+(extern fn allocate
+  ((params ((size usize)))
+   (return Data)
+   (requires ())
+   (documentation "Allocate raw storage."))
+  "malloc")
+
+(extern fn free
+  ((params ((data Data)))
+   (return unit)
+   (requires ())
+   (documentation "Release raw storage."))
+  "free")
 ```
 
 `Data` represents storage whose higher-level element type may be unknown. It is
@@ -318,9 +359,16 @@ Termis can declare C functions with `extern fn`. The optional final string names
 the linked C symbol; without it, the Termis function name is used as the C symbol.
 
 ```lisp
-(extern fn c-abs ((value i64)) i64 "llabs")
+(extern fn c-abs
+  ((params ((value i64)))
+   (return i64)
+   (requires ()))
+  "llabs")
 
-(fn main () i64
+(fn main
+  ((params ())
+   (return i64)
+   (requires ()))
   (c-abs -42))
 ```
 

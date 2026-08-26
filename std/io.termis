@@ -11,4 +11,9 @@
 
   (type File (& void))
 
-  (extern fn write ((data Data)) i32 "puts"))
+  (extern fn write
+    ((params ((data Data)))
+     (return i32)
+     (requires ())
+     (documentation "Write a nul-terminated string followed by a newline."))
+    "puts"))

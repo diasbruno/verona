@@ -1,7 +1,13 @@
 (type UserId u64)
 
-(fn same-user ((id UserId)) UserId
+(fn same-user
+  ((params ((id UserId)))
+   (return UserId)
+   (requires ()))
   id)
 
-(fn main () i64
+(fn main
+  ((params ())
+   (return i64)
+   (requires ()))
   (same-user 42))

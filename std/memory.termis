@@ -1,11 +1,46 @@
 (module std/memory
   (import std/data)
 
-  (extern fn allocate ((size usize)) Data "malloc")
-  (extern fn reallocate ((data Data) (size usize)) Data "realloc")
-  (extern fn free ((data Data)) unit "free")
+  (extern fn allocate
+    ((params ((size usize)))
+     (return Data)
+     (requires ())
+     (documentation "Allocate raw storage."))
+    "malloc")
+  (extern fn reallocate
+    ((params ((data Data) (size usize)))
+     (return Data)
+     (requires ())
+     (documentation "Resize raw storage."))
+    "realloc")
+  (extern fn free
+    ((params ((data Data)))
+     (return unit)
+     (requires ())
+     (documentation "Release raw storage."))
+    "free")
 
-  (extern fn copy ((destination Data) (source Data) (size usize)) Data "memcpy")
-  (extern fn move ((destination Data) (source Data) (size usize)) Data "memmove")
-  (extern fn set ((data Data) (value u8) (size usize)) Data "memset")
-  (extern fn compare ((left Data) (right Data) (size usize)) i32 "memcmp"))
+  (extern fn copy
+    ((params ((destination Data) (source Data) (size usize)))
+     (return Data)
+     (requires ())
+     (documentation "Copy raw storage."))
+    "memcpy")
+  (extern fn move
+    ((params ((destination Data) (source Data) (size usize)))
+     (return Data)
+     (requires ())
+     (documentation "Move possibly-overlapping raw storage."))
+    "memmove")
+  (extern fn set
+    ((params ((data Data) (value u8) (size usize)))
+     (return Data)
+     (requires ())
+     (documentation "Fill raw storage with a byte value."))
+    "memset")
+  (extern fn compare
+    ((params ((left Data) (right Data) (size usize)))
+     (return i32)
+     (requires ())
+     (documentation "Compare raw storage."))
+    "memcmp"))

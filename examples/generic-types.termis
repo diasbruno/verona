@@ -12,8 +12,14 @@
 (type CounterId
   (Identity i64))
 
-(fn same-number ((value CounterId)) CounterId
+(fn same-number
+  ((params ((value CounterId)))
+   (return CounterId)
+   (requires ()))
   value)
 
-(fn main () i64
+(fn main
+  ((params ())
+   (return i64)
+   (requires ()))
   (same-number 42))

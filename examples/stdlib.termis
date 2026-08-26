@@ -3,5 +3,8 @@
 
   (type LocalData Data)
 
-  (fn main () i64
+  (fn main
+    ((params ())
+     (return i64)
+     (requires ()))
     42))

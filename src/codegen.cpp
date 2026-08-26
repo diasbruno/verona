@@ -42,6 +42,7 @@ struct FunctionSignature {
   std::vector<std::pair<std::string, llvm::Type*>> parameters;
   llvm::Type* return_type = nullptr;
   bool external = false;
+  std::size_t body_index = 4;
 };
 
 struct ArmResult {
@@ -183,13 +184,125 @@ llvm::Type* llvm_type_for(llvm::LLVMContext& context,
   return llvm_type_for_type(context, module, *type, types, form.location, resolving);
 }
 
+bool is_stable_signature(const Form& form) {
+  const auto* fields = as_list(form);
+  if (fields == nullptr || fields->elements.empty()) {
+    return false;
+  }
+  const auto* first_field = as_list(element(*fields, 0));
+  if (first_field == nullptr || first_field->elements.empty()) {
+    return false;
+  }
+  const auto* first_head = as_symbol(element(*first_field, 0));
+  return first_head != nullptr &&
+         (first_head->name == "params" || first_head->name == "return" ||
+          first_head->name == "requires" || first_head->name == "documentation");
+}
+
+void parse_parameter_list(llvm::LLVMContext& context,
+                          const llvm::Module& module,
+                          const Form& form,
+                          const TypeEnvironment& types,
+                          std::vector<std::pair<std::string, llvm::Type*>>& parameters,
+                          std::string_view diagnostic_prefix) {
+  const auto* parameter_list = as_list(form);
+  if (parameter_list == nullptr) {
+    fail(form.location, std::string(diagnostic_prefix) + " parameters must be a list");
+  }
+  for (const auto& parameter_form : parameter_list->elements) {
+    const auto* parameter = as_list(*parameter_form);
+    if (parameter == nullptr || parameter->elements.size() != 2) {
+      fail(parameter_form->location, std::string(diagnostic_prefix) + " parameter requires name and type");
+    }
+    parameters.push_back({
+        symbol_name(element(*parameter, 0), std::string(diagnostic_prefix) + " parameter name must be a symbol"),
+        llvm_type_for(context, module, element(*parameter, 1), types),
+    });
+  }
+}
+
+void parse_stable_signature(llvm::LLVMContext& context,
+                            const llvm::Module& module,
+                            const Form& form,
+                            const TypeEnvironment& types,
+                            FunctionSignature& signature,
+                            std::string_view diagnostic_prefix) {
+  const auto* fields = as_list(form);
+  if (fields == nullptr) {
+    fail(form.location, std::string(diagnostic_prefix) + " signature must be a list");
+  }
+
+  bool found_params = false;
+  bool found_return = false;
+  bool found_requires = false;
+  for (const auto& field_form : fields->elements) {
+    const auto* field = as_list(*field_form);
+    if (field == nullptr || field->elements.empty()) {
+      fail(field_form->location, std::string(diagnostic_prefix) + " signature field must be a list");
+    }
+    const auto head = symbol_name(element(*field, 0), std::string(diagnostic_prefix) + " signature field name must be a symbol");
+
+    if (head == "params") {
+      if (found_params || field->elements.size() != 2) {
+        fail(field_form->location, std::string(diagnostic_prefix) + " params field expects one list");
+      }
+      parse_parameter_list(context, module, element(*field, 1), types, signature.parameters, diagnostic_prefix);
+      found_params = true;
+      continue;
+    }
+
+    if (head == "return") {
+      if (found_return || field->elements.size() != 2) {
+        fail(field_form->location, std::string(diagnostic_prefix) + " return field expects one type");
+      }
+      signature.return_type = llvm_type_for(context, module, element(*field, 1), types);
+      found_return = true;
+      continue;
+    }
+
+    if (head == "requires") {
+      if (found_requires || field->elements.size() != 2) {
+        fail(field_form->location, std::string(diagnostic_prefix) + " requires field expects one list");
+      }
+      const auto* requirements = as_list(element(*field, 1));
+      if (requirements == nullptr) {
+        fail(element(*field, 1).location, std::string(diagnostic_prefix) + " requires field value must be a list");
+      }
+      if (!requirements->elements.empty()) {
+        fail(field_form->location, "LLVM emission does not support type requirements yet");
+      }
+      found_requires = true;
+      continue;
+    }
+
+    if (head == "documentation") {
+      if (field->elements.size() != 2 || as_string(element(*field, 1)) == nullptr) {
+        fail(field_form->location, std::string(diagnostic_prefix) + " documentation field expects one string");
+      }
+      continue;
+    }
+
+    fail(field_form->location, "unknown function signature field");
+  }
+
+  if (!found_params) {
+    fail(form.location, std::string(diagnostic_prefix) + " signature requires params field");
+  }
+  if (!found_return) {
+    fail(form.location, std::string(diagnostic_prefix) + " signature requires return field");
+  }
+  if (!found_requires) {
+    fail(form.location, std::string(diagnostic_prefix) + " signature requires requires field");
+  }
+}
+
 FunctionSignature parse_signature(llvm::LLVMContext& context,
                                   const llvm::Module& module,
                                   const Form& form,
                                   const TypeEnvironment& types) {
   const auto* list = as_list(form);
-  if (list == nullptr || list->elements.size() < 5) {
-    fail(form.location, "function declaration requires name, parameters, return type, and body");
+  if (list == nullptr || list->elements.size() < 4) {
+    fail(form.location, "function declaration requires name, signature, and body");
   }
   if (symbol_name(element(*list, 0), "function head must be a symbol") != "fn") {
     fail(element(*list, 0).location, "expected function declaration");
@@ -198,22 +311,18 @@ FunctionSignature parse_signature(llvm::LLVMContext& context,
   FunctionSignature signature;
   signature.name = symbol_name(element(*list, 1), "function name must be a symbol");
   signature.link_name = signature.name;
-  signature.return_type = llvm_type_for(context, module, element(*list, 3), types);
+  if (is_stable_signature(element(*list, 2))) {
+    parse_stable_signature(context, module, element(*list, 2), types, signature, "function");
+    signature.body_index = 3;
+    return signature;
+  }
 
-  const auto* parameters = as_list(element(*list, 2));
-  if (parameters == nullptr) {
-    fail(element(*list, 2).location, "function parameters must be a list");
+  if (list->elements.size() < 5) {
+    fail(form.location, "function declaration requires name, parameters, return type, and body");
   }
-  for (const auto& parameter_form : parameters->elements) {
-    const auto* parameter = as_list(*parameter_form);
-    if (parameter == nullptr || parameter->elements.size() != 2) {
-      fail(parameter_form->location, "function parameter requires name and type");
-    }
-    signature.parameters.push_back({
-        symbol_name(element(*parameter, 0), "function parameter name must be a symbol"),
-        llvm_type_for(context, module, element(*parameter, 1), types),
-    });
-  }
+
+  signature.return_type = llvm_type_for(context, module, element(*list, 3), types);
+  parse_parameter_list(context, module, element(*list, 2), types, signature.parameters, "function");
 
   return signature;
 }
@@ -223,8 +332,8 @@ FunctionSignature parse_extern_signature(llvm::LLVMContext& context,
                                          const Form& form,
                                          const TypeEnvironment& types) {
   const auto* list = as_list(form);
-  if (list == nullptr || (list->elements.size() != 5 && list->elements.size() != 6)) {
-    fail(form.location, "extern function declaration expects 5 or 6 forms");
+  if (list == nullptr || list->elements.size() < 4 || list->elements.size() > 6) {
+    fail(form.location, "extern function declaration expects 4, 5, or 6 forms");
   }
   if (symbol_name(element(*list, 0), "extern declaration head must be a symbol") != "extern") {
     fail(element(*list, 0).location, "expected extern declaration");
@@ -236,23 +345,27 @@ FunctionSignature parse_extern_signature(llvm::LLVMContext& context,
   FunctionSignature signature;
   signature.name = symbol_name(element(*list, 2), "extern function name must be a symbol");
   signature.link_name = signature.name;
-  signature.return_type = llvm_type_for(context, module, element(*list, 4), types);
   signature.external = true;
-
-  const auto* parameters = as_list(element(*list, 3));
-  if (parameters == nullptr) {
-    fail(element(*list, 3).location, "extern function parameters must be a list");
-  }
-  for (const auto& parameter_form : parameters->elements) {
-    const auto* parameter = as_list(*parameter_form);
-    if (parameter == nullptr || parameter->elements.size() != 2) {
-      fail(parameter_form->location, "extern function parameter requires name and type");
+  if (is_stable_signature(element(*list, 3))) {
+    parse_stable_signature(context, module, element(*list, 3), types, signature, "extern function");
+    if (list->elements.size() == 5) {
+      const auto* link_name = as_string(element(*list, 4));
+      if (link_name == nullptr) {
+        fail(element(*list, 4).location, "extern function link name must be a string");
+      }
+      signature.link_name = link_name->value;
     }
-    signature.parameters.push_back({
-        symbol_name(element(*parameter, 0), "extern function parameter name must be a symbol"),
-        llvm_type_for(context, module, element(*parameter, 1), types),
-    });
+    if (list->elements.size() == 6) {
+      fail(form.location, "extern function declaration expects 4 or 5 forms with stable signature");
+    }
+    return signature;
   }
+
+  if (list->elements.size() != 5 && list->elements.size() != 6) {
+    fail(form.location, "extern function declaration expects 5 or 6 forms");
+  }
+  signature.return_type = llvm_type_for(context, module, element(*list, 4), types);
+  parse_parameter_list(context, module, element(*list, 3), types, signature.parameters, "extern function");
 
   if (list->elements.size() == 6) {
     const auto* link_name = as_string(element(*list, 5));
@@ -312,7 +425,7 @@ class FunctionEmitter {
     builder_.SetInsertPoint(entry);
 
     Value result{llvm::Type::getVoidTy(context_), nullptr};
-    for (std::size_t index = 4; index < list->elements.size(); ++index) {
+    for (std::size_t index = signature_.body_index; index < list->elements.size(); ++index) {
       result = emit_expression(element(*list, index));
     }
 
@@ -712,6 +825,8 @@ std::unique_ptr<llvm::Module> emit_module(llvm::LLVMContext& context,
       }
 
       case SemanticKind::type_declaration:
+      case SemanticKind::class_declaration:
+      case SemanticKind::implements_declaration:
       case SemanticKind::let_expression:
       case SemanticKind::do_expression:
       case SemanticKind::match_expression:
@@ -740,6 +855,8 @@ std::unique_ptr<llvm::Module> emit_module(llvm::LLVMContext& context,
       case SemanticKind::type_declaration:
         break;
 
+      case SemanticKind::class_declaration:
+      case SemanticKind::implements_declaration:
       case SemanticKind::let_expression:
       case SemanticKind::do_expression:
       case SemanticKind::match_expression:

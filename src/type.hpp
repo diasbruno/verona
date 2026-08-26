@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace termis {
@@ -128,6 +129,9 @@ TypeDeclaration parse_type_declaration(const Form& form);
 TypePtr clone_type(const Type& type);
 TypePtr instantiate_type_application(const Type& application, const TypeEnvironment& environment);
 std::string type_to_string(const Type& type);
+void validate_type_reference(const Type& type,
+                             const TypeEnvironment& environment,
+                             const std::unordered_set<std::string>& parameters);
 void validate_type_references(const TypeEnvironment& environment);
 
 }  // namespace termis

@@ -617,9 +617,9 @@ std::size_t MonomorphizationRegistry::size() const {
 
 namespace {
 
-void validate_type_reference(const Type& type,
-                             const TypeEnvironment& environment,
-                             const std::unordered_set<std::string>& parameters) {
+void validate_type_reference_impl(const Type& type,
+                                  const TypeEnvironment& environment,
+                                  const std::unordered_set<std::string>& parameters) {
   switch (type.kind) {
     case TypeKind::primitive:
       return;
@@ -653,7 +653,7 @@ void validate_type_reference(const Type& type,
         fail(type.location, "generic type argument count mismatch");
       }
       for (const auto& argument : type.arguments) {
-        validate_type_reference(*argument, environment, parameters);
+        validate_type_reference_impl(*argument, environment, parameters);
       }
       return;
     }
@@ -661,27 +661,27 @@ void validate_type_reference(const Type& type,
     case TypeKind::pointer:
     case TypeKind::array:
     case TypeKind::slice:
-      validate_type_reference(*type.element, environment, parameters);
+      validate_type_reference_impl(*type.element, environment, parameters);
       return;
 
     case TypeKind::function:
       for (const auto& argument : type.arguments) {
-        validate_type_reference(*argument, environment, parameters);
+        validate_type_reference_impl(*argument, environment, parameters);
       }
-      validate_type_reference(*type.result, environment, parameters);
+      validate_type_reference_impl(*type.result, environment, parameters);
       return;
 
     case TypeKind::product:
     case TypeKind::union_:
       for (const auto& field : type.fields) {
-        validate_type_reference(*field.type, environment, parameters);
+        validate_type_reference_impl(*field.type, environment, parameters);
       }
       return;
 
     case TypeKind::sum:
       for (const auto& alternative : type.alternatives) {
         for (const auto& payload : alternative.payload) {
-          validate_type_reference(*payload, environment, parameters);
+          validate_type_reference_impl(*payload, environment, parameters);
         }
       }
       return;
@@ -690,13 +690,19 @@ void validate_type_reference(const Type& type,
 
 }  // namespace
 
+void validate_type_reference(const Type& type,
+                             const TypeEnvironment& environment,
+                             const std::unordered_set<std::string>& parameters) {
+  validate_type_reference_impl(type, environment, parameters);
+}
+
 void validate_type_references(const TypeEnvironment& environment) {
   for (const auto& declaration : environment.declarations()) {
     std::unordered_set<std::string> parameters;
     for (const auto& parameter : declaration.parameters) {
       parameters.insert(parameter.name);
     }
-    validate_type_reference(*declaration.body, environment, parameters);
+    validate_type_reference_impl(*declaration.body, environment, parameters);
   }
 }
 

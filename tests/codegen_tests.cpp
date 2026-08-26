@@ -90,6 +90,25 @@ void emits_function_calls() {
   contains(ir, "call i64 @add(i64 10, i64 32)");
 }
 
+void emits_stable_signature_functions() {
+  const auto ir = emit(R"(
+    (fn add
+      ((params ((a i64) (b i64)))
+       (return i64)
+       (requires ())
+       (documentation "Add two values."))
+      (+ a b))
+    (fn main
+      ((params ())
+       (return i64)
+       (requires ()))
+      (add 10 32))
+  )");
+
+  contains(ir, "define i64 @add(i64 %a, i64 %b)");
+  contains(ir, "call i64 @add(i64 10, i64 32)");
+}
+
 void emits_string_literal_calls() {
   const auto ir = emit(R"(
     (type Data (& u8))
@@ -164,6 +183,7 @@ int main() {
   emits_match_expression();
   emits_match_binding();
   emits_function_calls();
+  emits_stable_signature_functions();
   emits_string_literal_calls();
   emits_extern_function_calls();
   emits_primitive_type_aliases();
