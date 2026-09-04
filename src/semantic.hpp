@@ -24,6 +24,7 @@ class SemanticError final : public std::runtime_error {
 
 enum class SemanticKind {
   type_declaration,
+  provide_declaration,
   class_declaration,
   implements_declaration,
   function_declaration,
@@ -58,10 +59,30 @@ struct TypeRequirement {
 struct FunctionSignatureDeclaration {
   std::string name;
   SourceLocation location;
+  std::vector<TypeParameter> type_parameters;
   std::vector<FunctionParameter> parameters;
   TypePtr result;
   std::vector<TypeRequirement> requirements;
   std::optional<std::string> documentation;
+};
+
+struct ProvideDeclaration {
+  std::string name;
+  SourceLocation location;
+  std::vector<FunctionSignatureDeclaration> functions;
+};
+
+class ProvideEnvironment {
+ public:
+  void declare(ProvideDeclaration declaration);
+
+  const ProvideDeclaration* find(std::string_view name) const;
+  const std::vector<ProvideDeclaration>& declarations() const;
+  std::size_t size() const;
+
+ private:
+  std::vector<ProvideDeclaration> declarations_;
+  std::unordered_map<std::string, std::size_t> declaration_indexes_;
 };
 
 struct ClassDeclaration {
@@ -97,6 +118,7 @@ class ClassEnvironment {
 struct Program {
   std::vector<SemanticNodePtr> forms;
   TypeEnvironment types;
+  ProvideEnvironment provides;
   ClassEnvironment classes;
 };
 

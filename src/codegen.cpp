@@ -195,7 +195,7 @@ bool is_stable_signature(const Form& form) {
   }
   const auto* first_head = as_symbol(element(*first_field, 0));
   return first_head != nullptr &&
-         (first_head->name == "params" || first_head->name == "return" ||
+         (first_head->name == "type-params" || first_head->name == "params" || first_head->name == "return" ||
           first_head->name == "requires" || first_head->name == "documentation");
 }
 
@@ -233,6 +233,7 @@ void parse_stable_signature(llvm::LLVMContext& context,
   }
 
   bool found_params = false;
+  bool found_type_params = false;
   bool found_return = false;
   bool found_requires = false;
   for (const auto& field_form : fields->elements) {
@@ -241,6 +242,21 @@ void parse_stable_signature(llvm::LLVMContext& context,
       fail(field_form->location, std::string(diagnostic_prefix) + " signature field must be a list");
     }
     const auto head = symbol_name(element(*field, 0), std::string(diagnostic_prefix) + " signature field name must be a symbol");
+
+    if (head == "type-params") {
+      if (found_type_params || field->elements.size() != 2) {
+        fail(field_form->location, std::string(diagnostic_prefix) + " type-params field expects one list");
+      }
+      const auto* type_parameters = as_list(element(*field, 1));
+      if (type_parameters == nullptr) {
+        fail(element(*field, 1).location, std::string(diagnostic_prefix) + " type-params field value must be a list");
+      }
+      if (!type_parameters->elements.empty()) {
+        fail(field_form->location, "LLVM emission does not support generic function signatures yet");
+      }
+      found_type_params = true;
+      continue;
+    }
 
     if (head == "params") {
       if (found_params || field->elements.size() != 2) {
@@ -825,6 +841,7 @@ std::unique_ptr<llvm::Module> emit_module(llvm::LLVMContext& context,
       }
 
       case SemanticKind::type_declaration:
+      case SemanticKind::provide_declaration:
       case SemanticKind::class_declaration:
       case SemanticKind::implements_declaration:
       case SemanticKind::let_expression:
@@ -853,10 +870,11 @@ std::unique_ptr<llvm::Module> emit_module(llvm::LLVMContext& context,
 
       case SemanticKind::extern_function_declaration:
       case SemanticKind::type_declaration:
-        break;
-
+      case SemanticKind::provide_declaration:
       case SemanticKind::class_declaration:
       case SemanticKind::implements_declaration:
+        break;
+
       case SemanticKind::let_expression:
       case SemanticKind::do_expression:
       case SemanticKind::match_expression:

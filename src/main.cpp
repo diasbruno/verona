@@ -1,9 +1,3 @@
-#include "codegen.hpp"
-#include "layout.hpp"
-#include "reader.hpp"
-#include "semantic.hpp"
-#include "type.hpp"
-
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -16,6 +10,12 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
+
+#include "codegen.hpp"
+#include "layout.hpp"
+#include "reader.hpp"
+#include "semantic.hpp"
+#include "type.hpp"
 
 namespace {
 

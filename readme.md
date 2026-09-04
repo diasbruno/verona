@@ -99,6 +99,8 @@ a symbol. These are the language forms currently recognized:
 (type name body)
 (type name (parameter*) body)
 
+(provide name provided-function+)
+
 (fn name signature body+)
 (extern fn name signature)
 (extern fn name signature "link-name")
@@ -117,23 +119,42 @@ a symbol. These are the language forms currently recognized:
 (list form*)
 ```
 
-`type`, `class`, `implements`, `fn`, `extern`, `const`, `let`, `do`, and `match`
-are classified as special forms. Any other list headed by a symbol is an
-application. Empty lists, `(list ...)`, and lists whose first element is not a
-symbol are list expressions; they are parsed and classified but not yet lowered
-to LLVM.
+`type`, `provide`, `class`, `implements`, `fn`, `extern`, `const`, `let`, `do`,
+and `match` are classified as special forms. Any other list headed by a symbol
+is an application. Empty lists, `(list ...)`, and lists whose first element is
+not a symbol are list expressions; they are parsed and classified but not yet
+lowered to LLVM.
 
 Function signatures are stable declaration lists with named fields:
 
 ```lisp
-((params ((parameter-name parameter-type)*))
+((type-params (type-parameter-name*))
+ (params ((parameter-name parameter-type)*))
  (return result-type)
  (requires ((Class type*)*))
  (documentation "optional documentation"))
 ```
 
-`documentation` is optional. `params`, `return`, and `requires` are currently
-required so the declaration shape remains fixed as requirements evolve.
+`type-params` and `documentation` are optional. `params`, `return`, and
+`requires` are currently required so the declaration shape remains fixed as
+requirements evolve.
+
+Provided declarations describe functions and operators supplied by the compiler,
+target, or runtime instead of by ordinary Termis code:
+
+```lisp
+(provide core/math
+  (fn +
+    ((type-params (T))
+     (params ((left T) (right T)))
+     (return T)
+     (requires ((Integer T)))
+     (documentation "Add two integers."))))
+```
+
+The semantic layer collects and validates these signatures. Code generation
+currently treats provided declarations as metadata; arithmetic and comparison
+operators are still lowered by their existing built-in LLVM paths.
 
 The compiler frontend handles `module` and `import` before semantic analysis.
 `(module name ...)` unwraps and contributes its body forms. `(import name)` is
@@ -141,9 +162,10 @@ accepted as a module dependency marker and then skipped; module paths supplied
 with `-I`/`--module-path` decide which files are loaded.
 
 Code generation currently lowers top-level `type`, `fn`, and `extern fn`
-declarations. Top-level `class` and `implements` declarations are recognized by
-semantic analysis but are not yet emitted. Top-level expressions and `const`
-declarations are recognized by semantic analysis but are not yet emitted.
+declarations. Top-level `provide`, `class`, and `implements` declarations are
+recognized by semantic analysis but are not yet emitted. Top-level expressions
+and `const` declarations are recognized by semantic analysis but are not yet
+emitted.
 Function bodies currently lower:
 
 ```text

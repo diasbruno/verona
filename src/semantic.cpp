@@ -118,7 +118,7 @@ bool is_stable_signature(const Form& form) {
   }
   const auto* first_head = as_symbol(element(*first_field, 0));
   return first_head != nullptr &&
-         (first_head->name == "params" || first_head->name == "return" ||
+         (first_head->name == "type-params" || first_head->name == "params" || first_head->name == "return" ||
           first_head->name == "requires" || first_head->name == "documentation");
 }
 
@@ -131,6 +131,7 @@ void parse_stable_signature_fields(FunctionSignatureDeclaration& signature,
   }
 
   bool found_params = false;
+  bool found_type_params = false;
   bool found_return = false;
   bool found_requires = false;
   bool found_documentation = false;
@@ -143,6 +144,16 @@ void parse_stable_signature_fields(FunctionSignatureDeclaration& signature,
     if (head == nullptr) {
       throw SemanticError(Diagnostic{element(*field, 0).location,
                                      std::string(owner) + " signature field name must be a symbol"});
+    }
+
+    if (head->name == "type-params") {
+      if (found_type_params || field->elements.size() != 2) {
+        throw SemanticError(Diagnostic{field_form->location,
+                                       std::string(owner) + " type-params field expects one list"});
+      }
+      signature.type_parameters = parse_type_parameters(element(*field, 1), "function");
+      found_type_params = true;
+      continue;
     }
 
     if (head->name == "params") {
@@ -229,7 +240,7 @@ FunctionSignatureDeclaration parse_function_signature(const Form& form, std::str
     throw SemanticError(Diagnostic{list_element(form, 1).location, std::string(owner) + " method name must be a symbol"});
   }
 
-  FunctionSignatureDeclaration signature{name->name, list_element(form, 1).location, {}, nullptr, {}, std::nullopt};
+  FunctionSignatureDeclaration signature{name->name, list_element(form, 1).location, {}, {}, nullptr, {}, std::nullopt};
   if (is_stable_signature(list_element(form, 2))) {
     parse_stable_signature_fields(signature, list_element(form, 2), owner);
     if (!allow_body && list->elements.size() != 3) {
@@ -255,8 +266,8 @@ FunctionSignatureDeclaration parse_function_signature(const Form& form, std::str
 
 ClassDeclaration parse_class_declaration(const Form& form) {
   const auto* list = as_list(form);
-  if (list == nullptr || list->elements.size() < 4) {
-    throw SemanticError(Diagnostic{form.location, "class declaration requires a name, parameters, and methods"});
+  if (list == nullptr || list->elements.size() < 3) {
+    throw SemanticError(Diagnostic{form.location, "class declaration requires a name and parameters"});
   }
   const auto* name = as_symbol(list_element(form, 1));
   if (name == nullptr) {
@@ -280,10 +291,32 @@ ClassDeclaration parse_class_declaration(const Form& form) {
   return declaration;
 }
 
+ProvideDeclaration parse_provide_declaration(const Form& form) {
+  const auto* list = as_list(form);
+  if (list == nullptr || list->elements.size() < 3) {
+    throw SemanticError(Diagnostic{form.location, "provide declaration requires a name and functions"});
+  }
+  const auto* name = as_symbol(list_element(form, 1));
+  if (name == nullptr) {
+    throw SemanticError(Diagnostic{list_element(form, 1).location, "provide declaration name must be a symbol"});
+  }
+
+  ProvideDeclaration declaration{name->name, list_element(form, 1).location, {}};
+  std::unordered_set<std::string> function_names;
+  for (std::size_t index = 2; index < list->elements.size(); ++index) {
+    auto function = parse_function_signature(list_element(form, index), "provide");
+    if (!function_names.insert(function.name).second) {
+      throw SemanticError(Diagnostic{function.location, "provide function redefines existing function"});
+    }
+    declaration.functions.push_back(std::move(function));
+  }
+  return declaration;
+}
+
 ImplementsDeclaration parse_implements_declaration(const Form& form) {
   const auto* list = as_list(form);
-  if (list == nullptr || list->elements.size() < 4) {
-    throw SemanticError(Diagnostic{form.location, "implements declaration requires a class, arguments, and methods"});
+  if (list == nullptr || list->elements.size() < 3) {
+    throw SemanticError(Diagnostic{form.location, "implements declaration requires a class and arguments"});
   }
   const auto* class_name = as_symbol(list_element(form, 1));
   if (class_name == nullptr) {
@@ -349,14 +382,20 @@ SemanticKind classify(const Form& form) {
   }
 
   if (head->name == "class") {
-    require_count_at_least(form, 4, "class declaration requires a name, parameters, and methods");
+    require_count_at_least(form, 3, "class declaration requires a name and parameters");
     require_symbol(list_element(form, 1), "class name must be a symbol");
     require_list(list_element(form, 2), "class parameters must be a list");
     return SemanticKind::class_declaration;
   }
 
+  if (head->name == "provide") {
+    require_count_at_least(form, 3, "provide declaration requires a name and functions");
+    require_symbol(list_element(form, 1), "provide declaration name must be a symbol");
+    return SemanticKind::provide_declaration;
+  }
+
   if (head->name == "implements") {
-    require_count_at_least(form, 4, "implements declaration requires a class, arguments, and methods");
+    require_count_at_least(form, 3, "implements declaration requires a class and arguments");
     require_symbol(list_element(form, 1), "implements class name must be a symbol");
     require_list(list_element(form, 2), "implements arguments must be a list");
     return SemanticKind::implements_declaration;
@@ -560,6 +599,32 @@ void ClassEnvironment::declare(ClassDeclaration declaration) {
   declarations_.push_back(std::move(declaration));
 }
 
+void ProvideEnvironment::declare(ProvideDeclaration declaration) {
+  if (declaration_indexes_.contains(declaration.name)) {
+    throw SemanticError(Diagnostic{declaration.location, "provide declaration redefines existing provide"});
+  }
+
+  const auto index = declarations_.size();
+  declaration_indexes_.emplace(declaration.name, index);
+  declarations_.push_back(std::move(declaration));
+}
+
+const ProvideDeclaration* ProvideEnvironment::find(std::string_view name) const {
+  const auto found = declaration_indexes_.find(std::string(name));
+  if (found == declaration_indexes_.end()) {
+    return nullptr;
+  }
+  return &declarations_[found->second];
+}
+
+const std::vector<ProvideDeclaration>& ProvideEnvironment::declarations() const {
+  return declarations_;
+}
+
+std::size_t ProvideEnvironment::size() const {
+  return declarations_.size();
+}
+
 void ClassEnvironment::declare(ImplementsDeclaration declaration) {
   implementations_.push_back(std::move(declaration));
 }
@@ -594,6 +659,10 @@ Program analyze_forms(const std::vector<FormPtr>& forms) {
         program.types.declare(parse_type_declaration(*form));
         break;
 
+      case SemanticKind::provide_declaration:
+        program.provides.declare(parse_provide_declaration(*form));
+        break;
+
       case SemanticKind::class_declaration:
         program.classes.declare(parse_class_declaration(*form));
         break;
@@ -616,6 +685,15 @@ Program analyze_forms(const std::vector<FormPtr>& forms) {
     program.forms.push_back(std::move(node));
   }
   validate_type_references(program.types);
+  for (const auto& declaration : program.provides.declarations()) {
+    for (const auto& function : declaration.functions) {
+      std::unordered_set<std::string> parameters;
+      for (const auto& parameter : function.type_parameters) {
+        parameters.insert(parameter.name);
+      }
+      validate_signature_types(function, program.types, program.classes, parameters);
+    }
+  }
   for (const auto& declaration : program.classes.declarations()) {
     std::unordered_set<std::string> parameters;
     for (const auto& parameter : declaration.parameters) {
