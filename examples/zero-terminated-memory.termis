@@ -1,0 +1,61 @@
+(module examples/zero-terminated-memory
+  (import std/io)
+  (import std/memory)
+
+  (extern fn put-char
+    ((params ((char i64)))
+     (return i32)
+     (requires ()))
+    "putchar")
+
+  (fn digit
+    ((params ((value i64)))
+     (return i64)
+     (requires ()))
+    (- value (* (/ value 10) 10)))
+
+  (fn print-positive-i64
+    ((params ((value i64)))
+     (return unit)
+     (requires ()))
+    (match (< value 10)
+      (true
+        (do
+          (put-char (+ value 48))
+          .))
+      (false
+        (do
+          (print-positive-i64 (/ value 10))
+          (put-char (+ (digit value) 48))
+          .))))
+
+  (fn print-i64
+    ((params ((value i64)))
+     (return unit)
+     (requires ()))
+    (match (< value 0)
+      (true
+        (do
+          (put-char 45)
+          (print-positive-i64 (- 0 value))
+          .))
+      (false
+        (print-positive-i64 value))))
+
+  (fn main
+    ((params ())
+     (return i32)
+     (requires ()))
+    (let ((length (length-until-zero "termis"))
+          (prefix-comparison (compare-until-zero-size "termis" "terminal" 4))
+          (comparison (compare-until-zero "termis" "terminal")))
+      (print-line "Length:")
+      (print-i64 length)
+      (put-char 10)
+      (match (> comparison 0)
+        (true (print-line "Comparison is positive"))
+        (false (print-line "Comparison is not positive")))
+      (print-line "Comparison:")
+      (print-i64 comparison)
+      (put-char 10)
+      0)))

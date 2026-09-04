@@ -1,0 +1,8 @@
+(module examples/hello
+  (import std/io)
+
+  (fn main
+    ((params ())
+     (return i32)
+     (requires ()))
+    (print-line "Hello from Termis")))

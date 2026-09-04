@@ -34,13 +34,23 @@ namespace {
 struct Value {
   llvm::Type* type = nullptr;
   llvm::Value* value = nullptr;
+  std::string termis_type;
+};
+
+struct Parameter {
+  std::string name;
+  llvm::Type* llvm_type = nullptr;
+  std::string termis_type;
+  bool accepts_data_literal = false;
 };
 
 struct FunctionSignature {
   std::string name;
   std::string link_name;
-  std::vector<std::pair<std::string, llvm::Type*>> parameters;
+  std::vector<Parameter> parameters;
   llvm::Type* return_type = nullptr;
+  std::string termis_return_type;
+  bool returns_data_literal = false;
   bool external = false;
   std::size_t body_index = 4;
 };
@@ -184,6 +194,31 @@ llvm::Type* llvm_type_for(llvm::LLVMContext& context,
   return llvm_type_for_type(context, module, *type, types, form.location, resolving);
 }
 
+std::string termis_type_for(const Form& form) {
+  const auto type = parse_type(form);
+  return type_to_string(*type);
+}
+
+bool type_resolves_to_data(const Type& type, const TypeEnvironment& types) {
+  if (type.kind == TypeKind::name) {
+    if (type.name == "Data") {
+      return true;
+    }
+    const auto* declaration = types.find(type.name);
+    return declaration != nullptr && type_resolves_to_data(*declaration->body, types);
+  }
+  if (type.kind == TypeKind::application) {
+    const auto instantiated = instantiate_type_application(type, types);
+    return type_resolves_to_data(*instantiated, types);
+  }
+  return false;
+}
+
+bool form_resolves_to_data(const Form& form, const TypeEnvironment& types) {
+  const auto type = parse_type(form);
+  return type_resolves_to_data(*type, types);
+}
+
 bool is_stable_signature(const Form& form) {
   const auto* fields = as_list(form);
   if (fields == nullptr || fields->elements.empty()) {
@@ -203,7 +238,7 @@ void parse_parameter_list(llvm::LLVMContext& context,
                           const llvm::Module& module,
                           const Form& form,
                           const TypeEnvironment& types,
-                          std::vector<std::pair<std::string, llvm::Type*>>& parameters,
+                          std::vector<Parameter>& parameters,
                           std::string_view diagnostic_prefix) {
   const auto* parameter_list = as_list(form);
   if (parameter_list == nullptr) {
@@ -214,9 +249,11 @@ void parse_parameter_list(llvm::LLVMContext& context,
     if (parameter == nullptr || parameter->elements.size() != 2) {
       fail(parameter_form->location, std::string(diagnostic_prefix) + " parameter requires name and type");
     }
-    parameters.push_back({
+    parameters.push_back(Parameter{
         symbol_name(element(*parameter, 0), std::string(diagnostic_prefix) + " parameter name must be a symbol"),
         llvm_type_for(context, module, element(*parameter, 1), types),
+        termis_type_for(element(*parameter, 1)),
+        form_resolves_to_data(element(*parameter, 1), types),
     });
   }
 }
@@ -272,6 +309,8 @@ void parse_stable_signature(llvm::LLVMContext& context,
         fail(field_form->location, std::string(diagnostic_prefix) + " return field expects one type");
       }
       signature.return_type = llvm_type_for(context, module, element(*field, 1), types);
+      signature.termis_return_type = termis_type_for(element(*field, 1));
+      signature.returns_data_literal = form_resolves_to_data(element(*field, 1), types);
       found_return = true;
       continue;
     }
@@ -338,6 +377,8 @@ FunctionSignature parse_signature(llvm::LLVMContext& context,
   }
 
   signature.return_type = llvm_type_for(context, module, element(*list, 3), types);
+  signature.termis_return_type = termis_type_for(element(*list, 3));
+  signature.returns_data_literal = form_resolves_to_data(element(*list, 3), types);
   parse_parameter_list(context, module, element(*list, 2), types, signature.parameters, "function");
 
   return signature;
@@ -381,6 +422,8 @@ FunctionSignature parse_extern_signature(llvm::LLVMContext& context,
     fail(form.location, "extern function declaration expects 5 or 6 forms");
   }
   signature.return_type = llvm_type_for(context, module, element(*list, 4), types);
+  signature.termis_return_type = termis_type_for(element(*list, 4));
+  signature.returns_data_literal = form_resolves_to_data(element(*list, 4), types);
   parse_parameter_list(context, module, element(*list, 3), types, signature.parameters, "extern function");
 
   if (list->elements.size() == 6) {
@@ -401,7 +444,7 @@ llvm::Function* declare_function(llvm::Module& module, const FunctionSignature& 
 
   std::vector<llvm::Type*> parameter_types;
   for (const auto& parameter : signature.parameters) {
-    parameter_types.push_back(parameter.second);
+    parameter_types.push_back(parameter.llvm_type);
   }
   auto* function_type = llvm::FunctionType::get(signature.return_type, parameter_types, false);
   auto* function = llvm::Function::Create(function_type,
@@ -432,15 +475,15 @@ class FunctionEmitter {
     auto* function = declare_function(module_, signature_);
     auto parameter = function->arg_begin();
     for (const auto& signature_parameter : signature_.parameters) {
-      parameter->setName(signature_parameter.first);
-      variables_.emplace(signature_parameter.first, Value{signature_parameter.second, &*parameter});
+      parameter->setName(signature_parameter.name);
+      variables_.emplace(signature_parameter.name, Value{signature_parameter.llvm_type, &*parameter, ""});
       ++parameter;
     }
 
     auto* entry = llvm::BasicBlock::Create(context_, "entry", function);
     builder_.SetInsertPoint(entry);
 
-    Value result{llvm::Type::getVoidTy(context_), nullptr};
+    Value result{llvm::Type::getVoidTy(context_), nullptr, ""};
     for (std::size_t index = signature_.body_index; index < list->elements.size(); ++index) {
       result = emit_expression(element(*list, index));
     }
@@ -448,7 +491,11 @@ class FunctionEmitter {
     if (signature_.return_type->isVoidTy()) {
       builder_.CreateRetVoid();
     } else {
-      require_type(result, signature_.return_type, declaration.location);
+      require_type(result,
+                   signature_.return_type,
+                   signature_.termis_return_type,
+                   signature_.returns_data_literal,
+                   declaration.location);
       builder_.CreateRet(result.value);
     }
   }
@@ -457,21 +504,21 @@ class FunctionEmitter {
   Value emit_expression(const Form& form) {
     if (const auto* integer = as_integer(form)) {
       auto* type = llvm::Type::getInt64Ty(context_);
-      return Value{type, llvm::ConstantInt::get(type, integer->value, true)};
+      return Value{type, llvm::ConstantInt::get(type, integer->value, true), ""};
     }
     if (const auto* string = as_string(form)) {
       auto* value = builder_.CreateGlobalString(string->value);
-      return Value{value->getType(), value};
+      return Value{value->getType(), value, "Data"};
     }
     if (is_unit(form)) {
-      return Value{llvm::Type::getVoidTy(context_), nullptr};
+      return Value{llvm::Type::getVoidTy(context_), nullptr, ""};
     }
     if (const auto* symbol = as_symbol(form)) {
       if (symbol->name == "true") {
-        return Value{llvm::Type::getInt1Ty(context_), llvm::ConstantInt::getTrue(context_)};
+        return Value{llvm::Type::getInt1Ty(context_), llvm::ConstantInt::getTrue(context_), ""};
       }
       if (symbol->name == "false") {
-        return Value{llvm::Type::getInt1Ty(context_), llvm::ConstantInt::getFalse(context_)};
+        return Value{llvm::Type::getInt1Ty(context_), llvm::ConstantInt::getFalse(context_), ""};
       }
       const auto found = variables_.find(symbol->name);
       if (found == variables_.end()) {
@@ -523,7 +570,7 @@ class FunctionEmitter {
       variables_[name] = emit_expression(element(*binding, 1));
     }
 
-    Value result{llvm::Type::getVoidTy(context_), nullptr};
+    Value result{llvm::Type::getVoidTy(context_), nullptr, ""};
     for (std::size_t index = 2; index < list.elements.size(); ++index) {
       result = emit_expression(element(list, index));
     }
@@ -535,7 +582,7 @@ class FunctionEmitter {
     if (list.elements.size() < 2) {
       fail(form.location, "do expression requires at least one body form");
     }
-    Value result{llvm::Type::getVoidTy(context_), nullptr};
+    Value result{llvm::Type::getVoidTy(context_), nullptr, ""};
     for (std::size_t index = 1; index < list.elements.size(); ++index) {
       result = emit_expression(element(list, index));
     }
@@ -594,7 +641,7 @@ class FunctionEmitter {
       if (binding.has_value()) {
         variables_[*binding] = scrutinee;
       }
-      const auto arm_value = emit_expression(element(*arm, 1));
+      auto arm_value = emit_expression(element(*arm, 1));
       variables_ = std::move(previous);
 
       if (result_type == nullptr) {
@@ -617,14 +664,14 @@ class FunctionEmitter {
 
     builder_.SetInsertPoint(done_block);
     if (result_type == nullptr || result_type->isVoidTy()) {
-      return Value{llvm::Type::getVoidTy(context_), nullptr};
+      return Value{llvm::Type::getVoidTy(context_), nullptr, ""};
     }
 
     auto* phi = builder_.CreatePHI(result_type, static_cast<unsigned>(arm_results.size()));
     for (const auto& result : arm_results) {
       phi->addIncoming(result.value.value, result.block);
     }
-    return Value{result_type, phi};
+    return Value{result_type, phi, arm_results.front().value.termis_type};
   }
 
   std::optional<std::string> emit_pattern_test(const Value& scrutinee,
@@ -637,7 +684,7 @@ class FunctionEmitter {
         return std::nullopt;
       }
       if (symbol->name == "true" || symbol->name == "false") {
-        require_type(scrutinee, llvm::Type::getInt1Ty(context_), pattern.location);
+        require_type_exact(scrutinee, llvm::Type::getInt1Ty(context_), pattern.location);
         auto* expected = symbol->name == "true" ? llvm::ConstantInt::getTrue(context_)
                                                 : llvm::ConstantInt::getFalse(context_);
         auto* condition = builder_.CreateICmpEQ(scrutinee.value, expected);
@@ -651,7 +698,7 @@ class FunctionEmitter {
 
     if (const auto* integer = as_integer(pattern)) {
       auto* type = llvm::Type::getInt64Ty(context_);
-      require_type(scrutinee, type, pattern.location);
+      require_type_exact(scrutinee, type, pattern.location);
       auto* expected = llvm::ConstantInt::get(type, integer->value, true);
       auto* condition = builder_.CreateICmpEQ(scrutinee.value, expected);
       emit_pattern_branch(pattern.location, condition, body_block, next_block);
@@ -659,7 +706,7 @@ class FunctionEmitter {
     }
 
     if (is_unit(pattern)) {
-      require_type(scrutinee, llvm::Type::getVoidTy(context_), pattern.location);
+      require_type_exact(scrutinee, llvm::Type::getVoidTy(context_), pattern.location);
       builder_.CreateBr(body_block);
       return std::nullopt;
     }
@@ -681,8 +728,8 @@ class FunctionEmitter {
     if (list.elements.size() != 3) {
       fail(form.location, "arithmetic expression requires two operands");
     }
-    const auto left = emit_expression(element(list, 1));
-    const auto right = emit_expression(element(list, 2));
+    auto left = emit_expression(element(list, 1));
+    auto right = emit_expression(element(list, 2));
     require_type(right, left.type, element(list, 2).location);
     if (!left.type->isIntegerTy(64) && !left.type->isIntegerTy(32)) {
       fail(form.location, "arithmetic currently supports i32 and i64 values");
@@ -698,15 +745,15 @@ class FunctionEmitter {
     } else {
       result = builder_.CreateSDiv(left.value, right.value);
     }
-    return Value{left.type, result};
+    return Value{left.type, result, ""};
   }
 
   Value emit_comparison(const Form& form, const List& list, std::string_view op) {
     if (list.elements.size() != 3) {
       fail(form.location, "comparison expression requires two operands");
     }
-    const auto left = emit_expression(element(list, 1));
-    const auto right = emit_expression(element(list, 2));
+    auto left = emit_expression(element(list, 1));
+    auto right = emit_expression(element(list, 2));
     require_type(right, left.type, element(list, 2).location);
 
     llvm::CmpInst::Predicate predicate;
@@ -723,7 +770,7 @@ class FunctionEmitter {
     } else {
       predicate = llvm::CmpInst::ICMP_SGE;
     }
-    return Value{llvm::Type::getInt1Ty(context_), builder_.CreateICmp(predicate, left.value, right.value)};
+    return Value{llvm::Type::getInt1Ty(context_), builder_.CreateICmp(predicate, left.value, right.value), ""};
   }
 
   Value emit_call(const Form& form, const List& list, const std::string& name) {
@@ -739,7 +786,11 @@ class FunctionEmitter {
     std::vector<llvm::Value*> arguments;
     for (std::size_t index = 1; index < list.elements.size(); ++index) {
       auto argument = emit_expression(element(list, index));
-      require_type(argument, signature.parameters[index - 1].second, element(list, index).location);
+      require_type(argument,
+                   signature.parameters[index - 1].llvm_type,
+                   signature.parameters[index - 1].termis_type,
+                   signature.parameters[index - 1].accepts_data_literal,
+                   element(list, index).location);
       arguments.push_back(argument.value);
     }
 
@@ -751,10 +802,35 @@ class FunctionEmitter {
       fail(form.location, "unknown function");
     }
     auto* call = builder_.CreateCall(function, arguments);
-    return Value{signature.return_type, signature.return_type->isVoidTy() ? nullptr : call};
+    return Value{signature.return_type,
+                 signature.return_type->isVoidTy() ? nullptr : call,
+                 signature.returns_data_literal ? "Data" : ""};
   }
 
-  void require_type(const Value& value, llvm::Type* expected, SourceLocation location) const {
+  void require_type(Value& value,
+                    llvm::Type* expected,
+                    std::string_view expected_termis_type,
+                    bool accepts_data_literal,
+                    SourceLocation location) {
+    if (value.type != expected && value.type->isIntegerTy() && expected->isIntegerTy() &&
+        !value.type->isIntegerTy(1) && !expected->isIntegerTy(1)) {
+      value.value = builder_.CreateIntCast(value.value, expected, true);
+      value.type = expected;
+    }
+    if (value.type != expected) {
+      fail(location, "expression type mismatch");
+    }
+    if (!value.termis_type.empty() && !expected_termis_type.empty() &&
+        !(value.termis_type == "Data" && accepts_data_literal) && value.termis_type != expected_termis_type) {
+      fail(location, "expression type mismatch");
+    }
+  }
+
+  void require_type(Value& value, llvm::Type* expected, SourceLocation location) {
+    require_type(value, expected, "", false, location);
+  }
+
+  void require_type_exact(const Value& value, llvm::Type* expected, SourceLocation location) const {
     if (value.type != expected) {
       fail(location, "expression type mismatch");
     }

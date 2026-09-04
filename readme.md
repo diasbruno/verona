@@ -59,7 +59,7 @@ The reader recognizes exactly these form kinds:
 
 ```text
 form    ::= atom | list
-atom    ::= symbol | integer | floating | string | "."
+atom    ::= symbol | integer | floating | data | "."
 list    ::= "(" form* ")"
 ```
 
@@ -86,7 +86,11 @@ decimal point:
 `.5` and `1.` are invalid. Floating-point literals are read as `f64` values, but
 LLVM lowering does not yet emit floating-point expressions.
 
-Strings are double-quoted and support `\n`, `\t`, `\"`, and `\\` escapes:
+Data literals are double-quoted and support `\n`, `\t`, `\"`, and `\\` escapes.
+A quoted literal has the `Data` type, which is represented as `char *` when
+passed to C. Termis keeps `string` as a library-level concept for functions that
+operate on `Data`, rather than treating quoted literals as a separate built-in
+string type:
 
 ```lisp
 "hello\n"
@@ -330,6 +334,19 @@ loaded explicitly with `-I`/`--module-path`; each path contributes every
 $ termisc -I std program.termis -o program
 ```
 
+Console output is available through `std.io`:
+
+```lisp
+(module examples/hello
+  (import std/io)
+
+  (fn main
+    ((params ())
+     (return i32)
+     (requires ()))
+    (print-line "Hello from Termis")))
+```
+
 Modules wrap their declarations. Imports record module dependencies, but modules
 are not bound to file boundaries and may be extended later; current conflict
 detection is based on duplicate declarations.
@@ -338,6 +355,7 @@ The initial standard-library modules are intentionally small:
 
 ```text
 std.data
+std.string
 std.memory
 std.io
 std.os
@@ -371,11 +389,37 @@ not imply length, ownership, encoding, or NUL termination.
    (requires ())
    (documentation "Release raw storage."))
   "free")
+
+(extern fn length-until-zero
+  ((params ((data Data)))
+   (return usize)
+   (requires ())
+   (documentation "Count bytes before the first zero byte."))
+  "strlen")
 ```
 
 `Data` represents storage whose higher-level element type may be unknown. It is
 not a dynamic `any` type and should be cast to a typed pointer before
 dereferencing once casts and dereference operations are available.
+
+`std.string` defines `String` as a higher-level text type backed by `Data` while
+the language grows owned values, lengths, and encoding-aware operations:
+
+```lisp
+(type String Data)
+```
+
+Quoted literals can be passed to `String` parameters. Raw C functions such as
+`strlen`, `strcpy`, and `strcmp` are exposed through `std.memory` as
+zero-terminated memory operations and do not define the high-level string
+surface:
+
+```lisp
+(extern fn consume-string ((text String)) unit "consume")
+
+(fn main () unit
+  (consume-string "hello"))
+```
 
 Termis can declare C functions with `extern fn`. The optional final string names
 the linked C symbol; without it, the Termis function name is used as the C symbol.

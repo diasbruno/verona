@@ -109,7 +109,7 @@ void emits_stable_signature_functions() {
   contains(ir, "call i64 @add(i64 10, i64 32)");
 }
 
-void emits_string_literal_calls() {
+void emits_data_literal_calls() {
   const auto ir = emit(R"(
     (type Data (& u8))
     (extern fn write ((data Data)) i32 "puts")
@@ -118,6 +118,35 @@ void emits_string_literal_calls() {
 
   contains(ir, "private unnamed_addr constant [6 x i8] c\"hello\\00\"");
   contains(ir, "call i32 @puts(ptr");
+}
+
+void emits_string_alias_literal_calls() {
+  const auto ir = emit(R"(
+    (type Data (& u8))
+    (type String Data)
+    (extern fn consume-string ((text String)) unit "consume")
+    (fn main () unit (consume-string "hello"))
+  )");
+
+  contains(ir, "declare void @consume(ptr)");
+  contains(ir, "call void @consume(ptr");
+}
+
+void rejects_data_literal_for_non_data_pointer_alias() {
+  try {
+    (void)emit(R"(
+      (type Data (& u8))
+      (type File (& void))
+      (extern fn close ((file File)) i32 "fclose")
+      (fn main () i32 (close "hello"))
+    )");
+  } catch (const termis::CodegenError& error) {
+    require(error.diagnostic().message == "expression type mismatch",
+            "expected pointer alias mismatch diagnostic");
+    return;
+  }
+
+  require(false, "expected codegen failure");
 }
 
 void emits_extern_function_calls() {
@@ -137,6 +166,16 @@ void emits_primitive_type_aliases() {
   )");
 
   contains(ir, "define i64 @identity(i64 %id)");
+  contains(ir, "ret i64 %id");
+}
+
+void emits_alias_values_for_underlying_types() {
+  const auto ir = emit(R"(
+    (type UserId u64)
+    (fn unwrap ((id UserId)) u64 id)
+  )");
+
+  contains(ir, "define i64 @unwrap(i64 %id)");
   contains(ir, "ret i64 %id");
 }
 
@@ -184,9 +223,12 @@ int main() {
   emits_match_binding();
   emits_function_calls();
   emits_stable_signature_functions();
-  emits_string_literal_calls();
+  emits_data_literal_calls();
+  emits_string_alias_literal_calls();
+  rejects_data_literal_for_non_data_pointer_alias();
   emits_extern_function_calls();
   emits_primitive_type_aliases();
+  emits_alias_values_for_underlying_types();
   emits_primitive_generic_instantiations();
   emits_alias_chains_through_generic_instantiations();
   rejects_type_mismatch();

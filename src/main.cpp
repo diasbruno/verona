@@ -72,7 +72,7 @@ std::filesystem::path make_temporary_object_path() {
   const auto directory = std::filesystem::temp_directory_path();
   for (int attempt = 0; attempt < 100; ++attempt) {
     auto path = directory / ("termis-" + std::to_string(now) + "-" +
-                             std::to_string(attempt) + ".o");
+std::to_string(attempt) + ".o");
     if (!std::filesystem::exists(path)) {
       return path;
     }
@@ -81,8 +81,8 @@ std::filesystem::path make_temporary_object_path() {
 }
 
 bool link_object_to_binary(std::string_view object,
-                           const std::filesystem::path& output_path,
-                           std::ostream& err) {
+const std::filesystem::path& output_path,
+			   std::ostream& err) {
   const auto object_path = make_temporary_object_path();
   {
     std::ofstream object_file{object_path, std::ios::binary};
@@ -94,7 +94,7 @@ bool link_object_to_binary(std::string_view object,
   }
 
   const auto command = "clang++ " + shell_quote(object_path.string()) + " -o " +
-                       shell_quote(output_path.string());
+		       shell_quote(output_path.string());
   const int status = std::system(command.c_str());
 
   std::error_code remove_error;
@@ -127,7 +127,7 @@ const termis::List* as_list(const termis::Form& form) {
 }
 
 std::optional<std::string> directive_module_name(const termis::Form& form,
-                                                 std::string_view directive) {
+std::string_view directive) {
   const auto* list = as_list(form);
   if (list == nullptr || list->elements.size() < 2) {
     return std::nullopt;
@@ -144,30 +144,30 @@ std::optional<std::string> directive_module_name(const termis::Form& form,
 }
 
 bool append_module_forms(std::vector<termis::FormPtr>& destination,
-                         std::vector<termis::FormPtr> source,
-                         std::ostream& err) {
+std::vector<termis::FormPtr> source,
+			 std::ostream& err) {
   for (auto& form : source) {
     const auto* list = as_list(*form);
     if (auto imported = directive_module_name(*form, "import")) {
       if (list->elements.size() != 2) {
-        err << "termisc: import expects exactly one module name\n";
-        return false;
+	err << "termisc: import expects exactly one module name\n";
+	return false;
       }
       continue;
     }
     if (auto module = directive_module_name(*form, "module")) {
       auto* module_list = std::get_if<termis::List>(&form->kind);
       if (module_list == nullptr || module_list->elements.size() < 2) {
-        err << "termisc: module expects a module name\n";
-        return false;
+	err << "termisc: module expects a module name\n";
+	return false;
       }
       std::vector<termis::FormPtr> body;
       body.reserve(module_list->elements.size() - 2);
       for (std::size_t index = 2; index < module_list->elements.size(); ++index) {
-        body.push_back(std::move(module_list->elements[index]));
+	body.push_back(std::move(module_list->elements[index]));
       }
       if (!append_module_forms(destination, std::move(body), err)) {
-        return false;
+	return false;
       }
       continue;
     }
@@ -177,8 +177,8 @@ bool append_module_forms(std::vector<termis::FormPtr>& destination,
 }
 
 bool append_source_file(std::vector<termis::FormPtr>& destination,
-                        const std::filesystem::path& path,
-                        std::ostream& err) {
+const std::filesystem::path& path,
+			std::ostream& err) {
   const auto source = read_file(path);
   if (!source.has_value()) {
     err << "termisc: unable to open module path file: " << path << '\n';
@@ -188,8 +188,8 @@ bool append_source_file(std::vector<termis::FormPtr>& destination,
 }
 
 bool append_module_path(std::vector<termis::FormPtr>& destination,
-                        const std::filesystem::path& path,
-                        std::ostream& err) {
+const std::filesystem::path& path,
+			std::ostream& err) {
   std::error_code status_error;
   const auto status = std::filesystem::status(path, status_error);
   if (status_error || !std::filesystem::exists(status)) {
@@ -257,8 +257,8 @@ ParseResult parse_options(int argc, char** argv, std::ostream& err) {
 
     if (arg == "-I" || arg == "--module-path") {
       if (i + 1 >= argc) {
-        err << "termisc: " << arg << " requires a path\n";
-        return ParseResult{std::nullopt, EXIT_FAILURE};
+err << "termisc: " << arg << " requires a path\n";
+	return ParseResult{std::nullopt, EXIT_FAILURE};
       }
       options.module_paths.emplace_back(argv[++i]);
       continue;
@@ -266,8 +266,8 @@ ParseResult parse_options(int argc, char** argv, std::ostream& err) {
 
     if (arg == "-o" || arg == "--output") {
       if (i + 1 >= argc) {
-        err << "termisc: " << arg << " requires a path\n";
-        return ParseResult{std::nullopt, EXIT_FAILURE};
+	err << "termisc: " << arg << " requires a path\n";
+	return ParseResult{std::nullopt, EXIT_FAILURE};
       }
       options.output_path = argv[++i];
       continue;
@@ -295,7 +295,8 @@ ParseResult parse_options(int argc, char** argv, std::ostream& err) {
   return ParseResult{std::move(options), EXIT_SUCCESS};
 }
 
-std::optional<std::vector<termis::FormPtr>> load_forms(const Options& options, std::ostream& err) {
+std::optional<std::vector<termis::FormPtr>>
+load_forms(const Options& options, std::ostream& err) {
   std::vector<termis::FormPtr> forms;
   for (const auto& module_path : options.module_paths) {
     if (!append_module_path(forms, module_path, err)) {
@@ -362,27 +363,27 @@ int main(int argc, char** argv) {
   } catch (const termis::ReadError& error) {
     const auto& diagnostic = error.diagnostic();
     std::cerr << options.input_path << ':' << diagnostic.location.line << ':'
-              << diagnostic.location.column << ": reader error: " << diagnostic.message << '\n';
+	      << diagnostic.location.column << ": reader error: " << diagnostic.message << '\n';
     return EXIT_FAILURE;
   } catch (const termis::SemanticError& error) {
     const auto& diagnostic = error.diagnostic();
     std::cerr << options.input_path << ':' << diagnostic.location.line << ':'
-              << diagnostic.location.column << ": semantic error: " << diagnostic.message << '\n';
+	      << diagnostic.location.column << ": semantic error: " << diagnostic.message << '\n';
     return EXIT_FAILURE;
   } catch (const termis::TypeError& error) {
     const auto& diagnostic = error.diagnostic();
     std::cerr << options.input_path << ':' << diagnostic.location.line << ':'
-              << diagnostic.location.column << ": type error: " << diagnostic.message << '\n';
+	      << diagnostic.location.column << ": type error: " << diagnostic.message << '\n';
     return EXIT_FAILURE;
   } catch (const termis::LayoutError& error) {
     const auto& diagnostic = error.diagnostic();
     std::cerr << options.input_path << ':' << diagnostic.location.line << ':'
-              << diagnostic.location.column << ": layout error: " << diagnostic.message << '\n';
+	      << diagnostic.location.column << ": layout error: " << diagnostic.message << '\n';
     return EXIT_FAILURE;
   } catch (const termis::CodegenError& error) {
     const auto& diagnostic = error.diagnostic();
     std::cerr << options.input_path << ':' << diagnostic.location.line << ':'
-              << diagnostic.location.column << ": codegen error: " << diagnostic.message << '\n';
+	      << diagnostic.location.column << ": codegen error: " << diagnostic.message << '\n';
     return EXIT_FAILURE;
   }
 
