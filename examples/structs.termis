@@ -1,0 +1,46 @@
+(type Packet
+  (product
+    (kind i64)
+    (value i64)))
+
+(type DecodeResult
+  (sum
+    Invalid
+    (Decoded i64)))
+
+(type Word
+  (union
+    (signed i64)
+    (unsigned u64)))
+
+(fn decode
+  ((params ((packet Packet)))
+   (return DecodeResult)
+   (requires ())
+   (documentation "Decode packets whose kind field is 1."))
+  (match (= (field packet kind) 1)
+    (true (DecodeResult Decoded (field packet value)))
+    (false (DecodeResult Invalid))))
+
+(fn decoded-or-zero
+  ((params ((result DecodeResult)))
+   (return i64)
+   (requires ())
+   (documentation "Return a decoded packet value, or zero for an invalid packet."))
+  (match result
+    ((Decoded value) value)
+    (Invalid 0)))
+
+(fn signed-word
+  ((params ((word Word)))
+   (return i64)
+   (requires ())
+   (documentation "Read a machine word through its signed view."))
+  (field word signed))
+
+(fn main
+  ((params ())
+   (return i64)
+   (requires ()))
+  (+ (decoded-or-zero (decode (Packet 1 37)))
+     (signed-word (Word signed 5))))

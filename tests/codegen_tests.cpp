@@ -201,6 +201,81 @@ void emits_alias_chains_through_generic_instantiations() {
   contains(ir, "ret i64 %value");
 }
 
+void emits_product_construction_and_field_access() {
+  const auto ir = emit(R"(
+    (type Point
+      (product
+        (x i64)
+        (y i64)))
+    (fn distance-from-origin-squared
+      ((params ((point Point)))
+       (return i64)
+       (requires ()))
+      (let ((x (field point x))
+            (y (field point y)))
+        (+ (* x x)
+           (* y y))))
+    (fn main
+      ((params ())
+       (return i64)
+       (requires ()))
+      (distance-from-origin-squared (Point 3 4)))
+  )");
+
+  contains(ir, "define i64 @distance-from-origin-squared({ i64, i64 } %point)");
+  contains(ir, "extractvalue { i64, i64 } %point, 0");
+  contains(ir, "extractvalue { i64, i64 } %point, 1");
+  contains(ir, "call i64 @distance-from-origin-squared({ i64, i64 } { i64 3, i64 4 })");
+}
+
+void emits_sum_construction_and_matching() {
+  const auto ir = emit(R"(
+    (type MaybeDistance
+      (sum
+        Unknown
+        (Known i64)))
+    (fn known-or-zero
+      ((params ((distance MaybeDistance)))
+       (return i64)
+       (requires ()))
+      (match distance
+        ((Known value) value)
+        (Unknown 0)))
+    (fn main
+      ((params ())
+       (return i64)
+       (requires ()))
+      (known-or-zero (MaybeDistance Known 25)))
+  )");
+
+  contains(ir, "define i64 @known-or-zero({ i32, i64 } %distance)");
+  contains(ir, "extractvalue { i32, i64 } %distance, 0");
+  contains(ir, "extractvalue { i32, i64 } %distance, 1");
+  contains(ir, "call i64 @known-or-zero({ i32, i64 } { i32 1, i64 25 })");
+}
+
+void emits_union_construction_and_field_access() {
+  const auto ir = emit(R"(
+    (type CoordinateBits
+      (union
+        (signed i64)
+        (unsigned u64)))
+    (fn signed-coordinate
+      ((params ((bits CoordinateBits)))
+       (return i64)
+       (requires ()))
+      (field bits signed))
+    (fn main
+      ((params ())
+       (return i64)
+       (requires ()))
+      (signed-coordinate (CoordinateBits signed 17)))
+  )");
+
+  contains(ir, "define i64 @signed-coordinate(i64 %bits)");
+  contains(ir, "call i64 @signed-coordinate(i64 17)");
+}
+
 void rejects_type_mismatch() {
   try {
     (void)emit("(fn bad () i64 true)");
@@ -231,5 +306,8 @@ int main() {
   emits_alias_values_for_underlying_types();
   emits_primitive_generic_instantiations();
   emits_alias_chains_through_generic_instantiations();
+  emits_product_construction_and_field_access();
+  emits_sum_construction_and_matching();
+  emits_union_construction_and_field_access();
   rejects_type_mismatch();
 }

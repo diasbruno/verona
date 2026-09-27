@@ -27,25 +27,15 @@
     {
       devShells = forAllSystems (
         pkgs:
-        let
-          llvm = pkgs.llvmPackages_21;
-        in
         {
           default = pkgs.mkShell {
             packages = [
-              llvm.clang
-              llvm.llvm
-              llvm.lld
               pkgs.cmake
-              pkgs.ninja
-              pkgs.pkg-config
+              pkgs.sbcl
             ];
 
             shellHook = ''
-              export CC=clang
-              export CXX=clang++
-              export LLVM_CONFIG=${llvm.llvm.dev}/bin/llvm-config
-              echo "Termis development shell: LLVM $(llvm-config --version)"
+              echo "Termis development shell: SBCL $(sbcl --version)"
             '';
           };
         }
