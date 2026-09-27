@@ -1,6 +1,6 @@
 (defpackage #:termis
   (:use #:cl)
-  (:shadow #:compile-file)
+  (:shadow #:compile-file #:declaration)
   (:export
    #:compiler
    #:make-compiler
@@ -58,6 +58,36 @@
    #:module
    #:module-source
    #:module-forms
+   #:module-declarations
+   #:module-namespace
+   #:module-environment
+   #:module-lookup
+   #:declaration
+   #:declaration-name
+   #:declaration-source
+   #:declaration-module
+   #:type-declaration
+   #:type-declaration-body
+   #:function-declaration
+   #:function-declaration-parameters
+   #:function-declaration-return-type
+   #:function-declaration-body
+   #:macro-declaration
+   #:macro-declaration-parameters
+   #:macro-declaration-body
+   #:constant-declaration
+   #:constant-declaration-type
+   #:constant-declaration-value
+   #:variable-declaration
+   #:variable-declaration-type
+   #:variable-declaration-initializer
+   #:definition-form-p
+   #:process-definition
+   #:definition-error
+   #:definition-error-syntax
+   #:duplicate-declaration-error
+   #:duplicate-declaration-error-name
+   #:duplicate-declaration-error-existing
    #:compile-string
    #:compile-file
    #:source-error

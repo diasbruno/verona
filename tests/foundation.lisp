@@ -3,7 +3,8 @@
   (:shadowing-import-from #:termis #:compile-file)
   (:import-from #:termis
                 #:compile-string #:make-compiler #:make-source
-                #:module-forms #:module-source #:read-source #:source-contents #:source-location-offset
+                #:module-forms #:module-source #:module-declarations #:module-environment #:module-lookup
+                #:read-source #:source-contents #:source-location-offset
                 #:source-location-column #:source-location-line #:source-name
                 #:syntax-datum #:syntax-end #:syntax-source #:syntax-start
                 #:syntax-with-datum #:termis-read-error
@@ -12,7 +13,15 @@
                 #:make-termis-list #:make-termis-name #:make-termis-function #:make-termis-macro
                 #:make-bootstrap-environment #:make-environment #:environment-bind
                 #:environment-child #:environment-lookup #:unbound-name-error
-                #:evaluate #:expand #:unit-literal-p))
+                #:evaluate #:expand #:unit-literal-p
+                #:declaration-name #:declaration-source #:declaration-module
+                #:type-declaration #:type-declaration-body
+                #:function-declaration #:function-declaration-parameters
+                #:function-declaration-return-type #:function-declaration-body
+                #:macro-declaration #:macro-declaration-parameters #:macro-declaration-body
+                #:constant-declaration #:constant-declaration-type #:constant-declaration-value
+                #:variable-declaration #:variable-declaration-type #:variable-declaration-initializer
+                #:duplicate-declaration-error #:termis-macro-p))
 
 (in-package #:termis/tests)
 
@@ -121,6 +130,57 @@
       (is (string= "%test-definition"
                    (termis-name-value (syntax-datum (first elements)))))
       (is (string= "foo" (termis-name-value (syntax-datum (second elements))))))))
+
+(test discovers-primitive-definition-declarations
+  (let* ((module (compile-string
+                  (make-compiler)
+                  (format nil "(%type Point (x f64) (y f64))~%\
+(%constant pi f64 3.14)~%\
+(%variable counter u64 0)~%\
+(%function add ((a i32) (b i32)) i32 (+ a b))")
+                  :name "definitions.termis"))
+         (declarations (module-declarations module))
+         (type (first declarations))
+         (constant (second declarations))
+         (variable (third declarations))
+         (function (fourth declarations)))
+    (is (= 4 (length declarations)))
+    (is (typep type 'type-declaration))
+    (is (= 2 (length (type-declaration-body type))))
+    (is (typep constant 'constant-declaration))
+    (is (typep variable 'variable-declaration))
+    (is (typep function 'function-declaration))
+    (is (eq module (declaration-module function)))
+    (is (eq (first (module-forms module)) (declaration-source type)))
+    (is (string= "add" (termis-name-value (declaration-name function))))
+    (is (termis-list-p (syntax-datum (function-declaration-parameters function))))
+    (is (termis-name-p (syntax-datum (function-declaration-return-type function))))
+    (is (termis-list-p (syntax-datum (function-declaration-body function))))
+    (is (termis-name-p (syntax-datum (constant-declaration-type constant))))
+    (is (= 0 (syntax-datum (variable-declaration-initializer variable))))
+    (is (eq type (module-lookup module (make-termis-name "Point"))))))
+
+(test registers-macros-sequentially-in-the-compile-time-environment
+  ;; X evaluates to the original, unevaluated syntax argument, making this a
+  ;; minimal executable macro body without defining surface macro syntax yet.
+  (let* ((module (compile-string
+                  (make-compiler)
+                  "(%macro identity (x) x) (identity (%type Later body))"
+                  :name "macros.termis"))
+         (declarations (module-declarations module))
+         (macro (first declarations))
+         (type (second declarations)))
+    (is (= 2 (length declarations)))
+    (is (typep macro 'macro-declaration))
+    (is (termis-macro-p
+         (environment-lookup (module-environment module)
+                             (make-termis-name "identity"))))
+    (is (string= "Later" (termis-name-value (declaration-name type))))))
+
+(test rejects-duplicate-declarations-across-kinds
+  (signals duplicate-declaration-error
+    (compile-string (make-compiler)
+                    "(%function value () i32 1) (%variable value i32 0)")))
 
 (defun run-tests ()
   (run! :termis))
