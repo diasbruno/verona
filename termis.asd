@@ -5,6 +5,7 @@
                (:file "src/source")
                (:file "src/syntax")
                (:file "src/reader")
+               (:file "src/evaluator")
                (:file "src/compiler")))
 
 (asdf:defsystem #:termis/tests

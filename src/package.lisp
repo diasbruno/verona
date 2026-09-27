@@ -14,14 +14,46 @@
    #:source-location-line
    #:source-location-column
    #:syntax
+   #:make-syntax
    #:syntax-datum
    #:syntax-source
    #:syntax-start
    #:syntax-end
+   #:syntax-with-datum
+   #:termis-name
+   #:make-termis-name
+   #:termis-name-p
+   #:termis-name-value
+   #:termis-name=
    #:termis-symbol
    #:termis-symbol-name
    #:unit-literal
    #:unit-literal-p
+   #:termis-list
+   #:make-termis-list
+   #:termis-list-p
+   #:termis-list-elements
+   #:termis-callable
+   #:termis-callable-p
+   #:termis-function
+   #:make-termis-function
+   #:termis-function-p
+   #:termis-macro
+   #:make-termis-macro
+   #:termis-macro-p
+   #:environment
+   #:make-environment
+   #:environment-parent
+   #:environment-bind
+   #:environment-lookup
+   #:environment-child
+   #:unbound-name-error
+   #:unbound-name-error-name
+   #:not-callable-error
+   #:not-callable-error-value
+   #:evaluate
+   #:expand
+   #:make-bootstrap-environment
    #:read-source
    #:module
    #:module-source

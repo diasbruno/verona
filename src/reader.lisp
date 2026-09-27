@@ -96,7 +96,7 @@
                             "invalid numeric literal"
                             "'.' is reserved for the unit literal")
                         start))
-          (t (make-termis-symbol :name text)))))
+          (t (make-termis-name text)))))
 
 (defun read-string-literal (state start)
   (reader-advance state)
@@ -128,7 +128,7 @@
                 (reader-fail state "unterminated list" start))
               (when (char= (reader-peek state) #\))
                 (reader-advance state)
-                (return (nreverse elements)))
+                (return (apply #'make-termis-list (nreverse elements))))
               (push (read-form state) elements))))
 
 (defun read-form (state)
