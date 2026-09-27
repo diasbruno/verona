@@ -5,24 +5,46 @@
 (defun make-compiler ()
   (make-instance 'compiler))
 
-(defclass module ()
-  ((source :initarg :source :reader module-source)
+(defclass compilation-unit ()
+  ((source :initarg :source
+           :reader compilation-unit-source
+           :reader module-source)
    ;; FORMS preserves the source program independently of declaration
    ;; discovery.  Later phases may decide what to do with non-definition
    ;; top-level forms without losing the original syntax.
-   (forms :initarg :forms :reader module-forms)
-   (declarations :initform '() :accessor module-declarations)
+   (forms :initarg :forms
+          :reader compilation-unit-forms
+          :reader module-forms)
+   (declarations :initform '()
+                 :accessor compilation-unit-declarations
+                 :accessor module-declarations)
    ;; This alist is deliberately separate from DECLARATIONS: registration
    ;; order is meaningful, while lookup needs a single namespace.
-   (namespace :initform '() :accessor module-namespace)
-   (environment :initarg :environment :reader module-environment)))
+   (namespace :initform '()
+              :accessor compilation-unit-namespace
+              :accessor module-namespace)
+   (environment :initarg :environment
+                :reader compilation-unit-environment
+                :reader compilation-unit-compile-time-environment
+                :reader module-environment)))
+
+;; MODULE was the name used by the preceding foundation stages.  Keep the
+;; legacy class as a compatibility subclass while new callers use
+;; COMPILATION-UNIT, which does not prematurely imply package or import
+;; semantics.
+(defclass module (compilation-unit) ())
 
 (defclass declaration ()
   ((name :initarg :name :reader declaration-name)
-   ;; SOURCE is the complete definition form, not a resolved compiler type or
-   ;; value.  All declaration-specific content remains source-aware syntax.
+   ;; SOURCE is the original complete top-level form, not a resolved compiler
+   ;; type or value.  All declaration-specific content remains source-aware.
    (source :initarg :source :reader declaration-source)
-   (module :initarg :module :reader declaration-module)))
+   ;; The primitive definition syntax produced by top-level expansion.  It is
+   ;; intentionally distinct from SOURCE when a macro produced the definition.
+   (expanded-syntax :initarg :expanded-syntax :reader declaration-expanded-syntax)
+   (module :initarg :module
+           :reader declaration-module
+           :reader declaration-compilation-unit)))
 
 (defclass type-declaration (declaration)
   ((body :initarg :body :reader type-declaration-body)))
@@ -61,12 +83,29 @@
    (existing :initarg :existing :reader duplicate-declaration-error-existing))
   (:report (lambda (condition stream)
              (let* ((syntax (definition-error-syntax condition))
-                    (location (syntax-start syntax)))
-               (format stream "~A:~D:~D: duplicate declaration of ~A"
+                    (location (syntax-start syntax))
+                    (existing-source
+                      (declaration-source
+                       (duplicate-declaration-error-existing condition)))
+                    (existing-location (syntax-start existing-source)))
+               (format stream "~A:~D:~D: duplicate definition `~A`~%~%previous definition:~%~A:~D:~D"
                        (source-name (syntax-source syntax))
                        (source-location-line location)
                        (source-location-column location)
-                       (termis-name-value (duplicate-declaration-error-name condition)))))))
+                       (termis-name-value (duplicate-declaration-error-name condition))
+                       (source-name (syntax-source existing-source))
+                       (source-location-line existing-location)
+                       (source-location-column existing-location))))))
+
+(define-condition non-definition-top-level-error (definition-error) ())
+
+(defstruct (top-level-expansion-result
+            (:constructor make-top-level-expansion-result (definitions)))
+  "The unambiguous, internal result of expanding one top-level source form.
+
+DEFINITIONS is a list of primitive definition syntax objects.  A distinct
+result object avoids treating an ordinary list expression as several forms."
+  (definitions '() :type list))
 
 (defparameter +definition-form-names+
   '("%type" "%function" "%macro" "%constant" "%variable"))
@@ -106,20 +145,29 @@
                        expected-name minimum-arguments))
     arguments))
 
-(defun module-lookup (module name)
+(defun find-declaration (unit name)
   "Look up NAME in MODULE's declaration namespace.
 
 The primary value is the declaration (or NIL); the secondary value says
 whether the name was present, so a future NIL-valued representation remains
 unambiguous."
-  (check-type module module)
+  (check-type unit compilation-unit)
   (check-type name termis-name)
-  (let ((binding (assoc name (module-namespace module) :test #'termis-name=)))
+  (let ((binding (assoc name (compilation-unit-namespace unit) :test #'termis-name=)))
     (values (cdr binding) (not (null binding)))))
 
-(defun register-declaration (module declaration)
+(defun module-lookup (module name)
+  "Compatibility name for FIND-DECLARATION."
+  (find-declaration module name))
+
+(defun unit-declarations (unit)
+  "Return UNIT's declarations in source discovery order."
+  (check-type unit compilation-unit)
+  (compilation-unit-declarations unit))
+
+(defun register-declaration (unit declaration)
   (let ((name (declaration-name declaration)))
-    (multiple-value-bind (existing foundp) (module-lookup module name)
+    (multiple-value-bind (existing foundp) (find-declaration unit name)
       (when foundp
         (error 'duplicate-declaration-error
                :syntax (declaration-source declaration)
@@ -127,9 +175,9 @@ unambiguous."
                :existing existing))
       ;; APPEND preserves program order; the namespace is an implementation
       ;; detail optimized for the tiny front end, not the ordered API.
-      (setf (module-declarations module)
-            (append (module-declarations module) (list declaration)))
-      (push (cons name declaration) (module-namespace module))
+      (setf (compilation-unit-declarations unit)
+            (append (compilation-unit-declarations unit) (list declaration)))
+      (push (cons name declaration) (compilation-unit-namespace unit))
       declaration)))
 
 (defun macro-parameter-names (definition parameters)
@@ -159,79 +207,127 @@ never evaluates a declaration body."
              for argument in arguments
              do (environment-bind macro-environment name argument))
        (let ((result (evaluate body macro-environment)))
-         (unless (typep result 'syntax)
-           (definition-fail definition "%macro body must evaluate to syntax"))
+         (unless (or (typep result 'syntax)
+                     (typep result 'top-level-expansion-result))
+           (definition-fail definition
+                            "%macro body must evaluate to syntax or top-level definitions"))
          result)))))
 
-(defun process-definition (context module syntax)
-  "Turn a primitive top-level definition SYNTAX into a registered declaration.
+(defun process-definition (context unit source &optional (expanded-syntax source))
+  "Turn EXPANDED-SYNTAX into a declaration, retaining its original SOURCE.
 
 CONTEXT is the compile-time evaluator environment.  The evaluator only
 expands syntax; this processor is the boundary that creates compiler objects."
   (check-type context environment)
-  (check-type module module)
-  (check-type syntax syntax)
-  (let ((head (definition-head-name syntax)))
-    (when head
-      (let ((elements (termis-list-elements (syntax-datum syntax))))
-        (flet ((make-declaration (class name &rest initargs)
-                 (register-declaration
-                  module
-                  (apply #'make-instance class
-                         :name name :source syntax :module module initargs))))
-          (cond
+  (check-type unit compilation-unit)
+  (check-type source syntax)
+  (check-type expanded-syntax syntax)
+  (let ((head (definition-head-name expanded-syntax)))
+    (unless head
+      (error 'non-definition-top-level-error
+             :syntax source
+             :message "top-level expansion must produce a definition"))
+    (flet ((make-declaration (class name &rest initargs)
+             (register-declaration
+              unit
+              (apply #'make-instance class
+                     :name name :source source :expanded-syntax expanded-syntax
+                     :module unit initargs))))
+      (cond
             ((string= head "%type")
-             (let* ((arguments (definition-elements syntax "type" 2))
-                    (name (definition-name syntax (first arguments))))
+             (let* ((arguments (definition-elements expanded-syntax "type" 2))
+                    (name (definition-name expanded-syntax (first arguments))))
                (make-declaration 'type-declaration name :body (rest arguments))))
             ((string= head "%function")
-             (let ((arguments (definition-elements syntax "function" 4)))
-               (unless (= (length arguments) 4)
-                 (definition-fail syntax "%function requires a name, parameters, return type, and body"))
+             (let ((arguments (definition-elements expanded-syntax "function" 4)))
+              (unless (= (length arguments) 4)
+                 (definition-fail expanded-syntax "%function requires a name, parameters, return type, and body"))
                (make-declaration 'function-declaration
-                                 (definition-name syntax (first arguments))
+                                 (definition-name expanded-syntax (first arguments))
                                  :parameters (second arguments)
                                  :return-type (third arguments)
                                  :body (fourth arguments))))
             ((string= head "%macro")
-             (let ((arguments (definition-elements syntax "macro" 3)))
-               (unless (= (length arguments) 3)
-                 (definition-fail syntax "%macro requires a name, parameters, and body"))
-               (let* ((name (definition-name syntax (first arguments)))
+             (let ((arguments (definition-elements expanded-syntax "macro" 3)))
+              (unless (= (length arguments) 3)
+                 (definition-fail expanded-syntax "%macro requires a name, parameters, and body"))
+               (let* ((name (definition-name expanded-syntax (first arguments)))
                       (parameters (second arguments))
                       (body (third arguments))
-                      (parameter-names (macro-parameter-names syntax parameters))
+                      (parameter-names (macro-parameter-names expanded-syntax parameters))
                       (declaration (make-declaration 'macro-declaration name
                                                      :parameters parameters :body body)))
                  ;; Bind only after successful registration so a duplicate
                  ;; definition cannot overwrite the existing macro.
                  (environment-bind context name
-                                   (declaration-macro syntax parameter-names body context))
+                                   (declaration-macro expanded-syntax parameter-names body context))
                  declaration)))
             ((string= head "%constant")
-             (let ((arguments (definition-elements syntax "constant" 3)))
-               (unless (= (length arguments) 3)
-                 (definition-fail syntax "%constant requires a name, type, and value"))
+             (let ((arguments (definition-elements expanded-syntax "constant" 3)))
+              (unless (= (length arguments) 3)
+                 (definition-fail expanded-syntax "%constant requires a name, type, and value"))
                (make-declaration 'constant-declaration
-                                 (definition-name syntax (first arguments))
+                                 (definition-name expanded-syntax (first arguments))
                                  :type (second arguments) :value (third arguments))))
             ((string= head "%variable")
-             (let ((arguments (definition-elements syntax "variable" 3)))
-               (unless (= (length arguments) 3)
-                 (definition-fail syntax "%variable requires a name, type, and initializer"))
+             (let ((arguments (definition-elements expanded-syntax "variable" 3)))
+              (unless (= (length arguments) 3)
+                 (definition-fail expanded-syntax "%variable requires a name, type, and initializer"))
                (make-declaration 'variable-declaration
-                                 (definition-name syntax (first arguments))
-                                 :type (second arguments) :initializer (third arguments))))))))))
+                                 (definition-name expanded-syntax (first arguments))
+                                 :type (second arguments) :initializer (third arguments))))))))
+
+(defun expand-top-level (syntax environment)
+  "Expand SYNTAX into a TOP-LEVEL-EXPANSION-RESULT.
+
+Unlike ordinary EXPAND, this protocol permits a macro to return an explicit
+TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
+  (check-type syntax syntax)
+  (check-type environment environment)
+  (labels ((expand-one (form)
+             (check-type form syntax)
+             (let ((macro (macro-at-head form environment)))
+               (if (not macro)
+                   (list form)
+                   (let ((result (let ((*macro-expansion-syntax* form))
+                                   (apply (termis-macro-implementation macro)
+                                          (rest (termis-list-elements
+                                                 (syntax-datum form)))))))
+                     (cond ((typep result 'syntax) (expand-one result))
+                           ((typep result 'top-level-expansion-result)
+                            (mapcan #'expand-one
+                                    (top-level-expansion-result-definitions result)))
+                           (t
+                            (error 'invalid-macro-result-error :value result))))))))
+    (make-top-level-expansion-result (expand-one syntax))))
+
+(defun make-compilation-environment ()
+  "Create the compile-time environment used while constructing one unit."
+  (let ((environment (make-bootstrap-environment)))
+    ;; This internal helper is deliberately available only during compilation.
+    ;; It gives source-defined macros a precise way to emit zero or more
+    ;; definitions without giving an ordinary Termis list a second meaning.
+    (environment-bind
+     environment (make-termis-name "definitions")
+     (make-termis-function
+      (lambda (&rest definitions)
+        (dolist (definition definitions)
+          (check-type definition syntax))
+        (make-top-level-expansion-result definitions))))
+    environment))
 
 (defun compile-source (source)
   (let* ((forms (read-source source))
-         (environment (make-bootstrap-environment))
-         (module (make-instance 'module :source source :forms forms
-                                         :environment environment)))
+         (environment (make-compilation-environment))
+         (unit (make-instance 'module :source source :forms forms
+                                      :environment environment)))
     ;; Only top-level forms reach the definition processor.  Expansion is
     ;; sequential because a preceding %MACRO can affect a following form.
-    (dolist (form forms module)
-      (process-definition environment module (expand form environment)))))
+    (dolist (form forms unit)
+      (dolist (expanded-syntax
+               (top-level-expansion-result-definitions
+                (expand-top-level form environment)))
+        (process-definition environment unit form expanded-syntax)))))
 
 (defun compile-string (compiler contents &key (name "<string>"))
   "Read and discover primitive top-level declarations in CONTENTS."

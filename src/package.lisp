@@ -55,6 +55,13 @@
    #:expand
    #:make-bootstrap-environment
    #:read-source
+   #:compilation-unit
+   #:compilation-unit-source
+   #:compilation-unit-forms
+   #:compilation-unit-declarations
+   #:compilation-unit-namespace
+   #:compilation-unit-environment
+   #:compilation-unit-compile-time-environment
    #:module
    #:module-source
    #:module-forms
@@ -62,10 +69,15 @@
    #:module-namespace
    #:module-environment
    #:module-lookup
+   #:unit-declarations
+   #:find-declaration
+   #:register-declaration
    #:declaration
    #:declaration-name
    #:declaration-source
+   #:declaration-expanded-syntax
    #:declaration-module
+   #:declaration-compilation-unit
    #:type-declaration
    #:type-declaration-body
    #:function-declaration
@@ -83,11 +95,16 @@
    #:variable-declaration-initializer
    #:definition-form-p
    #:process-definition
+   #:expand-top-level
+   #:top-level-expansion-result
+   #:make-top-level-expansion-result
+   #:top-level-expansion-result-definitions
    #:definition-error
    #:definition-error-syntax
    #:duplicate-declaration-error
    #:duplicate-declaration-error-name
    #:duplicate-declaration-error-existing
+   #:non-definition-top-level-error
    #:compile-string
    #:compile-file
    #:source-error

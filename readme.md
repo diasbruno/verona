@@ -1,12 +1,13 @@
 # Termis
 
 Termis is a statically typed systems language with S-expression syntax. This
-repository is currently at compiler foundation step 2: it reads a source file
-into source-aware syntax forms but deliberately does not evaluate, expand
-macros, analyze semantics, or generate code yet.
+repository has completed compiler foundation step 6: it reads source into
+source-aware syntax, sequentially performs top-level macro expansion, and
+collects declarations into a compilation unit. Declaration bodies remain
+unresolved syntax for later semantic phases.
 
 ```text
-Termis source → Source → Reader → Syntax → Module
+Termis source → Source → Reader → Syntax → Top-level expansion → Declarations → Compilation unit
 ```
 
 ## Front-end API
@@ -14,26 +15,29 @@ Termis source → Source → Reader → Syntax → Module
 ```lisp
 (defparameter *compiler* (termis:make-compiler))
 
-(defparameter *module*
+(defparameter *unit*
   (termis:compile-string
    *compiler*
    "(type Point
       (x f32)
       (y f32))
 
-    (defun origin () Point .)"))
+    (function origin () Point .)"))
 
-(termis:module-forms *module*)
+(termis:unit-declarations *unit*)
 ```
 
-`compile-file` accepts a pathname and follows the same source → reader path.
-Each syntax object retains its datum, source, and exclusive start/end locations,
-so later stages can produce useful diagnostics without retrofitting locations.
+`compile-file` accepts a pathname and follows the same pipeline. Every
+declaration exposes its original source form and its expanded syntax; the unit
+retains ordered declarations, a single declaration namespace, and the
+compile-time environment. Duplicate definitions report both source locations.
 
 The reader recognizes symbols, signed integers, decimal f64 literals,
-double-quoted data literals, lists, and `.` as the unit literal. Forms are
-intentionally not interpreted by this stage: `type`, `defun`, and every other
-head remain ordinary syntax.
+double-quoted data literals, lists, and `.` as the unit literal. The public
+definition forms (`type`, `function`, `macro`, `constant`, and `variable`) are
+top-level macros that expand into compiler definition forms. Discovery is
+ordered so macros can affect later source forms, while body analysis is deferred
+until all declarations are known.
 
 ## Development
 
