@@ -177,6 +177,77 @@
                              (make-termis-name "identity"))))
     (is (string= "Later" (termis-name-value (declaration-name type))))))
 
+(test bootstraps-the-public-definition-vocabulary-as-macros
+  (let ((environment (make-bootstrap-environment)))
+    (dolist (name '("type" "function" "macro" "constant" "variable"))
+      (is (termis-macro-p
+           (environment-lookup environment (make-termis-name name)))))))
+
+(test bootstrap-definition-macros-mechanically-rewrite-their-heads
+  (let ((environment (make-bootstrap-environment)))
+    (dolist (specification '(("type" . "%type")
+                             ("function" . "%function")
+                             ("macro" . "%macro")
+                             ("constant" . "%constant")
+                             ("variable" . "%variable")))
+      (let* ((form (first (read-source
+                           (make-source "expansion.termis"
+                                        (format nil "(~A declaration payload)"
+                                                (car specification))))))
+             (original-tail (rest (termis-list-elements (syntax-datum form))))
+             (expanded (expand form environment))
+             (expanded-elements (termis-list-elements (syntax-datum expanded))))
+        (is (string= (cdr specification)
+                     (termis-name-value (syntax-datum (first expanded-elements)))))
+        (is (every #'eq original-tail (rest expanded-elements)))))))
+
+(test compiles-surface-definition-macros-without-interpreting-their-content
+  (let* ((contents
+           (format nil "(type Point (x f64) (y f64))~%\
+(constant pi f64 3.141592653589793)~%\
+(variable counter u64 0)~%\
+(function calculate ((x i32)) i32 (expensive-compile-time-looking-form x))"))
+         (module (compile-string (make-compiler) contents
+                                 :name "surface-definitions.termis"))
+         (declarations (module-declarations module))
+         (function (fourth declarations)))
+    (is (= 4 (length declarations)))
+    (is (typep (first declarations) 'type-declaration))
+    (is (typep (second declarations) 'constant-declaration))
+    (is (typep (third declarations) 'variable-declaration))
+    (is (typep function 'function-declaration))
+    ;; Compilation succeeds even though the body head is unbound: expansion
+    ;; retained it as declaration syntax instead of evaluating it.
+    (let* ((body (function-declaration-body function))
+           (head (first (termis-list-elements (syntax-datum body)))))
+      (is (string= "expensive-compile-time-looking-form"
+                   (termis-name-value (syntax-datum head)))))))
+
+(test makes-user-macros-available-after-the-surface-macro-declaration
+  (let* ((module (compile-string
+                  (make-compiler)
+                  "(macro identity (x) x) (identity (type Later (value i32)))"
+                  :name "surface-macros.termis"))
+         (declarations (module-declarations module))
+         (macro (first declarations))
+         (type (second declarations)))
+    (is (= 2 (length declarations)))
+    (is (typep macro 'macro-declaration))
+    (is (termis-macro-p
+         (environment-lookup (module-environment module)
+                             (make-termis-name "identity"))))
+    (is (typep type 'type-declaration))
+    (is (string= "Later" (termis-name-value (declaration-name type))))))
+
+(test surface-definition-forms-are-not-compiler-primitives
+  (let* ((forms (read-source (make-source "boundary.termis"
+                                          "(function foo () i32 1) (%function foo () i32 1)")))
+         (empty-environment (make-environment)))
+    (is (eq (first forms) (expand (first forms) empty-environment)))
+    (is (eq (second forms) (expand (second forms) empty-environment)))
+    (is (= 1 (length (module-declarations
+                      (compile-string (make-compiler) "(%function foo () i32 1)")))))))
+
 (test rejects-duplicate-declarations-across-kinds
   (signals duplicate-declaration-error
     (compile-string (make-compiler)

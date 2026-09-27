@@ -29,6 +29,11 @@ IMPLEMENTATION must return one SYNTAX object."
   (check-type implementation function)
   (make-instance 'termis-macro :implementation implementation))
 
+;; Macro implementations receive their arguments as syntax objects.  Retaining
+;; the enclosing form during expansion lets the bootstrap definition macros
+;; replace only their head while preserving the complete source span.
+(defvar *macro-expansion-syntax* nil)
+
 (define-condition unbound-name-error (error)
   ((name :initarg :name :reader unbound-name-error-name))
   (:report (lambda (condition stream)
@@ -116,7 +121,8 @@ forms such as %FUNCTION are therefore left as Termis syntax for a later step."
   (let ((macro (macro-at-head syntax environment)))
     (if macro
         (let* ((arguments (rest (termis-list-elements (syntax-datum syntax))))
-               (result (apply (termis-macro-implementation macro) arguments)))
+               (result (let ((*macro-expansion-syntax* syntax))
+                         (apply (termis-macro-implementation macro) arguments))))
           (unless (typep result 'syntax)
             (error 'invalid-macro-result-error :value result))
           (expand result environment))
@@ -149,11 +155,34 @@ forms such as %FUNCTION are therefore left as Termis syntax for a later step."
           ;; Unit, booleans, numbers, and strings are self-evaluating values.
           (t datum))))
 
+(defun bootstrap-definition-macro (primitive-name)
+  "Make a surface definition macro that mechanically produces PRIMITIVE-NAME.
+
+The arguments remain their original syntax objects: this layer deliberately
+does not inspect, evaluate, or otherwise interpret declaration contents."
+  (make-termis-macro
+   (lambda (&rest arguments)
+     (let* ((form *macro-expansion-syntax*)
+            (elements (termis-list-elements (syntax-datum form)))
+            (head (syntax-with-datum (first elements)
+                                     (make-termis-name primitive-name))))
+       (syntax-with-datum form
+                          (apply #'make-termis-list head arguments))))))
+
 (defun make-bootstrap-environment ()
-  "Create the minimal evaluator environment, without Termis definition forms."
+  "Create the evaluator environment and its standard Termis definition macros."
   (let ((environment (make-environment)))
     ;; This primitive exists solely to prove ordinary and nested calls.  Its
     ;; binding key is a Termis name, never the host's CL:+ symbol.
     (environment-bind environment (make-termis-name "+")
                       (make-termis-function #'+))
+    ;; The compiler recognizes only the %... forms.  The ordinary declaration
+    ;; vocabulary belongs to this Termis-level environment instead.
+    (dolist (definition '( ("type" . "%type")
+                           ("function" . "%function")
+                           ("macro" . "%macro")
+                           ("constant" . "%constant")
+                           ("variable" . "%variable")))
+      (environment-bind environment (make-termis-name (car definition))
+                        (bootstrap-definition-macro (cdr definition))))
     environment))
