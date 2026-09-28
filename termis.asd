@@ -6,7 +6,9 @@
                (:file "src/syntax")
                (:file "src/reader")
                (:file "src/evaluator")
-               (:file "src/compiler")))
+               (:file "src/semantic")
+               (:file "src/compiler")
+               (:file "src/resolver")))
 
 (asdf:defsystem #:termis/tests
   :depends-on (#:termis #:fiveam)

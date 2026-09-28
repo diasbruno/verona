@@ -4,6 +4,7 @@
   (:import-from #:termis
 		#:compile-string #:make-compiler #:make-source
 		#:compilation-unit #:compilation-unit-source #:compilation-unit-forms
+		#:compilation-unit-semantic-program
 		#:unit-declarations #:find-declaration
 		#:module-forms #:module-source #:module-declarations #:module-environment #:module-lookup
 		#:read-source #:source-contents #:source-location-offset
@@ -23,7 +24,17 @@
 		#:macro-declaration #:macro-declaration-parameters #:macro-declaration-body
 		#:constant-declaration #:constant-declaration-type #:constant-declaration-value
 		#:variable-declaration #:variable-declaration-type #:variable-declaration-initializer
-		#:duplicate-declaration-error #:non-definition-top-level-error #:termis-macro-p))
+		#:duplicate-declaration-error #:non-definition-top-level-error #:termis-macro-p
+		#:semantic-program-declaration #:semantic-function-declaration
+		#:semantic-function-declaration-parameters
+		#:semantic-function-declaration-return-type-reference
+		#:semantic-function-declaration-body
+		#:semantic-reference #:semantic-reference-binding
+		#:semantic-call #:semantic-call-callee #:semantic-call-arguments
+		#:parameter-binding #:parameter-binding-type-reference
+		#:make-semantic-scope #:semantic-scope-child #:semantic-scope-bind
+		#:semantic-scope-lookup
+		#:unresolved-name-error #:duplicate-local-binding-error))
 
 (in-package #:termis/tests)
 
@@ -214,7 +225,7 @@
 	   (format nil "(type Point (x f64) (y f64))~%\
  (constant pi f64 3.141592653589793)~%\
  (variable counter u64 0)~%\
- (function calculate ((x i32)) i32 (expensive-compile-time-looking-form x))"))
+ (function calculate ((x i32)) i32 (+ x 1))"))
 	 (module (compile-string (make-compiler) contents
 				 :name "surface-definitions.termis"))
 	 (declarations (module-declarations module))
@@ -224,11 +235,11 @@
     (is (typep (second declarations) 'constant-declaration))
     (is (typep (third declarations) 'variable-declaration))
     (is (typep function 'function-declaration))
-    ;; Compilation succeeds even though the body head is unbound: expansion
-    ;; retained it as declaration syntax instead of evaluating it.
+    ;; The declaration remains raw syntax even though Step 7 also builds a
+    ;; separate resolved semantic body.
     (let* ((body (function-declaration-body function))
 	   (head (first (termis-list-elements (syntax-datum body)))))
-      (is (string= "expensive-compile-time-looking-form"
+      (is (string= "+"
 		   (termis-name-value (syntax-datum head)))))))
 
 (test makes-user-macros-available-after-the-surface-macro-declaration
@@ -331,6 +342,85 @@
       (is (search "duplicates.termis:2:1: duplicate definition `answer`" message))
       (is (search "previous definition:" message))
       (is (search "duplicates.termis:1:1" message)))))
+
+(test resolves-global-bindings-signatures-and-forward-calls-by-identity
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(type Point body)\
+                 (constant origin i32 0)\
+                 (function second ((p Point)) i32 origin)\
+                 (function first ((p Point)) i32 (second p))"))
+         (declarations (unit-declarations unit))
+         (point (first declarations))
+         (origin (second declarations))
+         (second (third declarations))
+         (first (fourth declarations))
+         (program (compilation-unit-semantic-program unit))
+         (second-semantic (semantic-program-declaration program second))
+         (first-semantic (semantic-program-declaration program first))
+         (first-parameter (first (semantic-function-declaration-parameters
+                                  first-semantic)))
+         (first-body (semantic-function-declaration-body first-semantic)))
+    ;; Signature type names point at the exact source declaration/builtin.
+    (is (eq point
+            (semantic-reference-binding
+             (parameter-binding-type-reference first-parameter))))
+    ;; A bare body name is a reference to the constant declaration itself.
+    (is (eq origin
+            (semantic-reference-binding
+             (semantic-function-declaration-body second-semantic))))
+    ;; A forward function call and its parameter use each retain identity.
+    (is (typep first-body 'semantic-call))
+    (is (eq second
+            (semantic-reference-binding (semantic-call-callee first-body))))
+    (is (eq first-parameter
+            (semantic-reference-binding
+             (first (semantic-call-arguments first-body)))))))
+
+(test resolves-builtins-and-shadows-global-bindings-with-parameters
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(variable x i32 10) (function foo ((x i32)) i32 (+ x 1))"))
+         (global (first (unit-declarations unit)))
+         (function (second (unit-declarations unit)))
+         (semantic (semantic-program-declaration
+                    (compilation-unit-semantic-program unit) function))
+         (parameter (first (semantic-function-declaration-parameters semantic)))
+         (body (semantic-function-declaration-body semantic))
+         (argument (first (semantic-call-arguments body))))
+    (is (not (eq global (semantic-reference-binding argument))))
+    (is (eq parameter (semantic-reference-binding argument)))
+    (is (not (null (semantic-reference-binding
+                    (semantic-function-declaration-return-type-reference
+                     semantic)))))
+    ;; + resolves through the bootstrap semantic scope, not special text.
+    (is (typep (semantic-call-callee body) 'semantic-reference))
+    (is (not (null (semantic-reference-binding
+                    (semantic-call-callee body)))))))
+
+(test semantic-scopes-support-nested-lookup-and-identity-shadowing
+  (let* ((global (make-semantic-scope))
+         (function (semantic-scope-child global))
+         (lexical (semantic-scope-child function))
+         (name (make-termis-name "x"))
+         (outer (make-instance 'parameter-binding :name name))
+         (inner (make-instance 'parameter-binding :name name)))
+    (semantic-scope-bind global name outer)
+    (is (eq outer (semantic-scope-lookup lexical name)))
+    (semantic-scope-bind function name inner)
+    (is (eq inner (semantic-scope-lookup lexical name)))
+    (is (eq outer (semantic-scope-lookup global name)))))
+
+(test reports-unresolved-runtime-names-and-duplicate-parameters
+  (signals unresolved-name-error
+    (compile-string (make-compiler) "(function foo () i32 unknown)"))
+  (signals unresolved-name-error
+    ;; The macro is available only to expansion, not to semantic lookup.
+    (compile-string (make-compiler)
+                    "(macro compile-only () 0) (function foo () i32 compile-only)"))
+  (signals duplicate-local-binding-error
+    (compile-string (make-compiler)
+                    "(function foo ((x i32) (x i32)) i32 x)")))
 
 (defun run-tests ()
   (run! :termis))

@@ -26,7 +26,12 @@
    (environment :initarg :environment
                 :reader compilation-unit-environment
                 :reader compilation-unit-compile-time-environment
-                :reader module-environment)))
+                :reader module-environment)
+   ;; Populated only after declaration collection.  This is intentionally not
+   ;; the compile-time ENVIRONMENT above: it contains resolved compiler
+   ;; entities rather than evaluator bindings or macros.
+   (semantic-program :initform nil
+                     :accessor compilation-unit-semantic-program)))
 
 ;; MODULE was the name used by the preceding foundation stages.  Keep the
 ;; legacy class as a compatibility subclass while new callers use
@@ -34,9 +39,8 @@
 ;; semantics.
 (defclass module (compilation-unit) ())
 
-(defclass declaration ()
-  ((name :initarg :name :reader declaration-name)
-   ;; SOURCE is the original complete top-level form, not a resolved compiler
+(defclass declaration (semantic-binding)
+  (;; SOURCE is the original complete top-level form, not a resolved compiler
    ;; type or value.  All declaration-specific content remains source-aware.
    (source :initarg :source :reader declaration-source)
    ;; The primitive definition syntax produced by top-level expansion.  It is
@@ -327,7 +331,9 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
       (dolist (expanded-syntax
                (top-level-expansion-result-definitions
                 (expand-top-level form environment)))
-        (process-definition environment unit form expanded-syntax)))))
+        (process-definition environment unit form expanded-syntax)))
+    (resolve-compilation-unit unit)
+    unit))
 
 (defun compile-string (compiler contents &key (name "<string>"))
   "Read and discover primitive top-level declarations in CONTENTS."

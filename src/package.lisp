@@ -62,6 +62,7 @@
    #:compilation-unit-namespace
    #:compilation-unit-environment
    #:compilation-unit-compile-time-environment
+   #:compilation-unit-semantic-program
    #:module
    #:module-source
    #:module-forms
@@ -73,6 +74,8 @@
    #:find-declaration
    #:register-declaration
    #:declaration
+   #:semantic-binding
+   #:semantic-binding-name
    #:declaration-name
    #:declaration-source
    #:declaration-expanded-syntax
@@ -93,6 +96,47 @@
    #:variable-declaration
    #:variable-declaration-type
    #:variable-declaration-initializer
+   #:semantic-scope
+   #:make-semantic-scope
+   #:semantic-scope-parent
+   #:semantic-scope-bind
+   #:semantic-scope-find
+   #:semantic-scope-lookup
+   #:semantic-scope-child
+   #:semantic-program
+   #:semantic-program-bootstrap-scope
+   #:semantic-program-module-scope
+   #:semantic-program-declaration
+   #:make-bootstrap-semantic-scope
+   #:parameter-binding
+   #:parameter-binding-syntax
+   #:parameter-binding-type-syntax
+   #:parameter-binding-type-reference
+   #:semantic-declaration
+   #:semantic-declaration-source-declaration
+   #:semantic-type-declaration
+   #:semantic-constant-declaration
+   #:semantic-constant-declaration-type-reference
+   #:semantic-constant-declaration-initializer
+   #:semantic-variable-declaration
+   #:semantic-variable-declaration-type-reference
+   #:semantic-variable-declaration-initializer
+   #:semantic-function-declaration
+   #:semantic-function-declaration-scope
+   #:semantic-function-declaration-parameters
+   #:semantic-function-declaration-return-type-reference
+   #:semantic-function-declaration-body
+   #:semantic-expression
+   #:semantic-expression-syntax
+   #:semantic-literal
+   #:semantic-reference
+   #:semantic-reference-name
+   #:semantic-reference-binding
+   #:semantic-call
+   #:semantic-call-callee
+   #:semantic-call-arguments
+   #:build-semantic-expression
+   #:resolve-compilation-unit
    #:definition-form-p
    #:process-definition
    #:expand-top-level
@@ -105,6 +149,11 @@
    #:duplicate-declaration-error-name
    #:duplicate-declaration-error-existing
    #:non-definition-top-level-error
+   #:semantic-error
+   #:semantic-error-syntax
+   #:unresolved-name-error
+   #:unresolved-name-error-name
+   #:duplicate-local-binding-error
    #:compile-string
    #:compile-file
    #:source-error
