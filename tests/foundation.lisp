@@ -26,12 +26,22 @@
 		#:variable-declaration #:variable-declaration-type #:variable-declaration-initializer
 		#:duplicate-declaration-error #:non-definition-top-level-error #:termis-macro-p
 		#:semantic-program-declaration #:semantic-function-declaration
+		#:semantic-program-type-context #:semantic-type-declaration
+		#:semantic-type-declaration-type
 		#:semantic-function-declaration-parameters
 		#:semantic-function-declaration-return-type-reference
+		#:semantic-function-declaration-return-type
+		#:semantic-function-declaration-type
 		#:semantic-function-declaration-body
 		#:semantic-reference #:semantic-reference-binding
 		#:semantic-call #:semantic-call-callee #:semantic-call-arguments
-		#:parameter-binding #:parameter-binding-type-reference
+		#:parameter-binding #:parameter-binding-type-reference #:parameter-binding-type
+		#:semantic-variable-declaration #:semantic-variable-declaration-type
+		#:semantic-constant-declaration #:semantic-constant-declaration-type
+		#:unit-type #:boolean-type #:integer-type #:integer-type-signed #:integer-type-width
+		#:float-type #:float-type-width #:pointer-type #:pointer-type-target
+		#:function-type #:function-type-parameters #:function-type-result
+		#:defined-type #:defined-type-declaration #:expected-type-error
 		#:make-semantic-scope #:semantic-scope-child #:semantic-scope-bind
 		#:semantic-scope-lookup
 		#:unresolved-name-error #:duplicate-local-binding-error))
@@ -423,6 +433,80 @@
   (signals duplicate-local-binding-error
     (compile-string (make-compiler)
                     "(function foo ((x i32) (x i32)) i32 x)")))
+
+(test resolves-canonical-primitive-pointer-and-function-types
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(type Node (value i32) (next (pointer Node)))\
+                 (variable current (pointer Node) unit)\
+                 (function distance ((a (pointer Node))\
+                                     (b (pointer (pointer i32)))) f64 unit)\
+                 (function another-distance ((a (pointer Node))\
+                                             (b (pointer (pointer i32)))) f64 unit)\
+                 (function nothing () unit unit)"))
+         (declarations (unit-declarations unit))
+         (node (first declarations))
+         (current (second declarations))
+         (distance (third declarations))
+         (another-distance (fourth declarations))
+         (nothing (fifth declarations))
+         (program (compilation-unit-semantic-program unit))
+         (node-semantic (semantic-program-declaration program node))
+         (current-semantic (semantic-program-declaration program current))
+         (distance-semantic (semantic-program-declaration program distance))
+         (another-semantic (semantic-program-declaration program another-distance))
+         (nothing-semantic (semantic-program-declaration program nothing))
+         (node-type (semantic-type-declaration-type node-semantic))
+         (current-type (semantic-variable-declaration-type current-semantic))
+         (parameters (semantic-function-declaration-parameters distance-semantic))
+         (first-parameter-type (parameter-binding-type (first parameters)))
+         (second-parameter-type (parameter-binding-type (second parameters))))
+    (is (typep node-type 'defined-type))
+    (is (eq node (defined-type-declaration node-type)))
+    (is (typep current-type 'pointer-type))
+    (is (eq node-type (pointer-type-target current-type)))
+    ;; Repeated pointer syntax reuses the same interned object.
+    (is (eq current-type first-parameter-type))
+    (is (typep second-parameter-type 'pointer-type))
+    (is (typep (pointer-type-target second-parameter-type) 'pointer-type))
+    (let ((integer (pointer-type-target
+                    (pointer-type-target second-parameter-type))))
+      (is (typep integer 'integer-type))
+      (is (integer-type-signed integer))
+      (is (= 32 (integer-type-width integer))))
+    (is (typep (semantic-function-declaration-return-type distance-semantic)
+               'float-type))
+    (is (= 64 (float-type-width
+               (semantic-function-declaration-return-type distance-semantic))))
+    (is (typep (semantic-function-declaration-type distance-semantic) 'function-type))
+    (is (eq (semantic-function-declaration-type distance-semantic)
+            (semantic-function-declaration-type another-semantic)))
+    (is (typep (semantic-function-declaration-return-type nothing-semantic)
+               'unit-type))))
+
+(test rejects-resolved-names-that-do-not-denote-types
+  (signals expected-type-error
+    (compile-string (make-compiler)
+                    "(function value () i32 unit) (variable counter value 0)")))
+
+(test bootstraps-a-canonical-boolean-type
+  (let* ((unit (compile-string (make-compiler)
+                               "(function predicate ((value bool)) bool unit)"))
+         (semantic (semantic-program-declaration
+                    (compilation-unit-semantic-program unit)
+                    (first (unit-declarations unit))))
+         (parameter (first (semantic-function-declaration-parameters semantic))))
+    (is (typep (parameter-binding-type parameter) 'boolean-type))
+    (is (eq (parameter-binding-type parameter)
+            (semantic-function-declaration-return-type semantic)))))
+
+(test uses-unit-for-the-unit-type-and-value
+  (let* ((unit (compile-string (make-compiler)
+                               "(function no-op () unit unit)"))
+         (semantic (semantic-program-declaration
+                    (compilation-unit-semantic-program unit)
+                    (first (unit-declarations unit)))))
+    (is (typep (semantic-function-declaration-return-type semantic) 'unit-type))))
 
 (defun run-tests ()
   (run! :termis))

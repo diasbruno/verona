@@ -107,24 +107,31 @@
    #:semantic-program-bootstrap-scope
    #:semantic-program-module-scope
    #:semantic-program-declaration
+   #:semantic-program-type-context
    #:make-bootstrap-semantic-scope
    #:parameter-binding
    #:parameter-binding-syntax
    #:parameter-binding-type-syntax
    #:parameter-binding-type-reference
+   #:parameter-binding-type
    #:semantic-declaration
    #:semantic-declaration-source-declaration
    #:semantic-type-declaration
+   #:semantic-type-declaration-type
    #:semantic-constant-declaration
    #:semantic-constant-declaration-type-reference
+   #:semantic-constant-declaration-type
    #:semantic-constant-declaration-initializer
    #:semantic-variable-declaration
    #:semantic-variable-declaration-type-reference
+   #:semantic-variable-declaration-type
    #:semantic-variable-declaration-initializer
    #:semantic-function-declaration
    #:semantic-function-declaration-scope
    #:semantic-function-declaration-parameters
    #:semantic-function-declaration-return-type-reference
+   #:semantic-function-declaration-return-type
+   #:semantic-function-declaration-type
    #:semantic-function-declaration-body
    #:semantic-expression
    #:semantic-expression-syntax
@@ -135,6 +142,41 @@
    #:semantic-call
    #:semantic-call-callee
    #:semantic-call-arguments
+   #:semantic-type-syntax
+   #:semantic-unit-type-syntax
+   #:semantic-pointer-type-syntax
+   #:semantic-pointer-type-syntax-target
+   #:termis-type
+   #:unit-type
+   #:boolean-type
+   #:integer-type
+   #:integer-type-signed
+   #:integer-type-width
+   #:float-type
+   #:float-type-width
+   #:pointer-type
+   #:pointer-type-target
+   #:function-type
+   #:function-type-parameters
+   #:function-type-result
+   #:defined-type
+   #:defined-type-declaration
+   #:type-context
+   #:make-type-context
+   #:type-context-unit-type
+   #:type-context-boolean-type
+   #:type-context-integer-type
+   #:type-context-float-type
+   #:type-context-pointer-type
+   #:type-context-function-type
+   #:type-context-defined-type
+   #:builtin-type-binding
+   #:builtin-type-binding-type
+   #:builtin-type-declaration
+   #:expected-type-error
+   #:expected-type-error-binding
+   #:resolve-type
+   #:resolve-types
    #:build-semantic-expression
    #:resolve-compilation-unit
    #:definition-form-p
