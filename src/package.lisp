@@ -147,6 +147,9 @@
    #:expression-type
    #:semantic-literal
    #:unit-expression
+
+   #:unit-expression-value
+   #:unit-value
    #:boolean-literal
    #:integer-literal
    #:integer-literal-value
@@ -162,15 +165,21 @@
    #:semantic-call-callee
    #:semantic-call-arguments
    #:call-expression
+   #:primitive-call
+   #:primitive-call-operation
+   #:conversion-expression
    #:sequence-expression
    #:sequence-expression-expressions
    #:address-expression
    #:address-expression-operand
    #:dereference-expression
    #:dereference-expression-operand
+   #:load-expression
+   #:load-expression-place
    #:assignment-expression
    #:assignment-expression-target
    #:assignment-expression-value
+   #:store-expression
    #:place-expression
    #:place-expression-addressable-p
    #:place-expression-writable-p
@@ -189,6 +198,7 @@
    #:float-type-width
    #:pointer-type
    #:pointer-type-target
+   #:pointer-type-pointee
    #:function-type
    #:function-type-parameters
    #:function-type-result
@@ -197,6 +207,10 @@
    #:type-context
    #:make-type-context
    #:type-context-unit-type
+   #:type-context-unit-value
+   #:type-context-pointer-width
+   #:type-context-unit-representation-type
+   #:unit-machine-representation
    #:type-context-boolean-type
    #:type-context-string-type
    #:type-context-integer-type
@@ -209,6 +223,15 @@
    #:builtin-type-declaration
    #:builtin-intrinsic-binding
    #:builtin-intrinsic-binding-type
+   #:primitive-binding
+   #:primitive-binding-operation
+   #:primitive-operation
+   #:primitive-operation-identity
+   #:primitive-operation-name
+   #:primitive-operation-parameter-types
+   #:primitive-operation-result-type
+   #:primitive-operation-kind
+   #:primitive-operation-nan-semantics
    #:expected-type-error
    #:expected-type-error-binding
    #:resolve-type
@@ -227,6 +250,9 @@
    #:not-addressable-error
    #:not-writable-error
    #:invalid-expression-error
+   #:backend-validation-error
+   #:validate-for-backend
+   #:backend-representable-type-p
    #:build-semantic-expression
    #:resolve-compilation-unit
    #:definition-form-p

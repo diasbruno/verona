@@ -38,22 +38,30 @@
 		#:semantic-reference #:semantic-reference-binding
 		#:semantic-call #:semantic-call-callee #:semantic-call-arguments
 		#:semantic-expression-type #:expression-source
+		#:primitive-call #:primitive-call-operation #:conversion-expression
+		#:primitive-operation #:primitive-operation-kind #:primitive-operation-parameter-types
+		#:primitive-operation-result-type #:primitive-operation-nan-semantics
 		#:integer-literal #:boolean-literal #:string-literal
 		#:sequence-expression #:sequence-expression-expressions
 		#:assignment-expression #:assignment-expression-target
 		#:address-expression #:dereference-expression
+		#:load-expression #:load-expression-place #:store-expression
 		#:place-expression-addressable-p #:place-expression-writable-p
 		#:parameter-binding #:parameter-binding-type-reference #:parameter-binding-type
 		#:semantic-variable-declaration #:semantic-variable-declaration-type
 		#:semantic-constant-declaration #:semantic-constant-declaration-type
 		#:unit-type #:boolean-type #:integer-type #:integer-type-signed #:integer-type-width
+		#:unit-value #:unit-expression #:unit-expression-value
 		#:float-type #:float-type-width #:pointer-type #:pointer-type-target
 		#:function-type #:function-type-parameters #:function-type-result
+		#:make-type-context #:type-context-unit-type #:type-context-unit-value
+		#:type-context-unit-representation-type #:unit-machine-representation
 		#:defined-type #:defined-type-declaration #:expected-type-error
 		#:type-mismatch-error #:not-writable-error #:not-addressable-error
 		#:make-semantic-scope #:semantic-scope-child #:semantic-scope-bind
 		#:semantic-scope-lookup
-		#:unresolved-name-error #:duplicate-local-binding-error))
+		#:unresolved-name-error #:duplicate-local-binding-error
+		#:validate-for-backend))
 
 (in-package #:termis/tests)
 
@@ -394,9 +402,13 @@
     (is (typep first-body 'semantic-call))
     (is (eq second
             (semantic-reference-binding (semantic-call-callee first-body))))
+    ;; A parameter used as a value carries an explicit semantic load; its
+    ;; place identity remains available to address-of and store operations.
+    (is (typep (first (semantic-call-arguments first-body)) 'load-expression))
     (is (eq first-parameter
             (semantic-reference-binding
-             (first (semantic-call-arguments first-body)))))))
+             (load-expression-place
+              (first (semantic-call-arguments first-body))))))))
 
 (test resolves-builtins-and-shadows-global-bindings-with-parameters
   (let* ((unit (compile-string
@@ -409,8 +421,9 @@
          (parameter (first (semantic-function-declaration-parameters semantic)))
          (body (semantic-function-declaration-body semantic))
          (argument (first (semantic-call-arguments body))))
-    (is (not (eq global (semantic-reference-binding argument))))
-    (is (eq parameter (semantic-reference-binding argument)))
+    (is (typep argument 'load-expression))
+    (is (not (eq global (semantic-reference-binding (load-expression-place argument)))))
+    (is (eq parameter (semantic-reference-binding (load-expression-place argument))))
     (is (not (null (semantic-reference-binding
                     (semantic-function-declaration-return-type-reference
                      semantic)))))
@@ -564,6 +577,57 @@
   (signals not-addressable-error
     (compile-string (make-compiler)
                     "(function address () (pointer i32) (& (+ 1 2)))")))
+
+(test bootstraps-concrete-primitive-identities-and-explicit-conversions
+  (let* ((unit (compile-string
+		(make-compiler)
+		"(function widen ((value i32)) i64 (%sext-primitive-i32-i64 value))\
+                 (function compare ((left f64) (right f64)) bool (%<-primitive-f64 left right))"))
+	 (program (compilation-unit-semantic-program unit))
+	 (widen (semantic-program-declaration program (first (unit-declarations unit))) )
+	 (compare (semantic-program-declaration program (second (unit-declarations unit))))
+	 (conversion (semantic-function-declaration-body widen))
+	 (comparison (semantic-function-declaration-body compare)))
+    (is (typep conversion 'conversion-expression))
+    (is (typep (primitive-call-operation conversion) 'primitive-operation))
+    (is (eq :integer-sign-extend
+	    (primitive-operation-kind (primitive-call-operation conversion))))
+    (is (typep comparison 'primitive-call))
+    (is (eq :float-ordered-less-than
+	    (primitive-operation-kind (primitive-call-operation comparison))))
+    (is (eq :ordered-false
+	    (primitive-operation-nan-semantics (primitive-call-operation comparison))))
+    (is (eq program (validate-for-backend program)))))
+
+(test enforces-exact-primitive-types-and-explicit-memory-reads
+  (signals type-mismatch-error
+    (compile-string (make-compiler)
+                    "(function wrong ((value i32)) i64 (%+-primitive-i64 value 1))"))
+  (let* ((unit (compile-string
+		(make-compiler)
+		"(function read ((address (pointer i64))) i64 (load (dereference address)))\
+                 (function write ((address (pointer i64)) (value i64)) unit\
+                   (do (store (dereference address) value) unit))"))
+	 (program (compilation-unit-semantic-program unit))
+	 (read-function (semantic-program-declaration program (first (unit-declarations unit))))
+	 (write-function (semantic-program-declaration program (second (unit-declarations unit))))
+	 (write-body (semantic-function-declaration-body write-function)))
+    (is (typep (semantic-function-declaration-body read-function) 'load-expression))
+    (is (typep (load-expression-place (semantic-function-declaration-body read-function))
+	       'dereference-expression))
+    (is (typep (first (sequence-expression-expressions write-body)) 'store-expression))
+    (is (eq program (validate-for-backend program)))))
+
+(test models-unit-as-a-distinct-singleton-with-pointer-width-representation
+  (let ((context32 (make-type-context :pointer-width 32))
+	(context64 (make-type-context :pointer-width 64)))
+    (is (typep (type-context-unit-type context32) 'unit-type))
+    (is (typep (type-context-unit-value context32) 'unit-value))
+    (is (= 32 (integer-type-width (type-context-unit-representation-type context32))))
+    (is (= 64 (integer-type-width (type-context-unit-representation-type context64))))
+    (is (not (eq (type-context-unit-type context64)
+		 (type-context-unit-representation-type context64))))
+    (is (= 0 (unit-machine-representation context64 (type-context-unit-value context64))))))
 
 (defun run-tests ()
   (run! :termis))
