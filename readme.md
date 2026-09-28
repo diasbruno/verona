@@ -22,7 +22,7 @@ Termis source → Source → Reader → Syntax → Top-level expansion → Decla
       (x f32)
       (y f32))
 
-    (function origin () Point .)"))
+    (function origin () Point unit)"))
 
 (termis:unit-declarations *unit*)
 ```
@@ -33,7 +33,9 @@ retains ordered declarations, a single declaration namespace, and the
 compile-time environment. Duplicate definitions report both source locations.
 
 The reader recognizes symbols, signed integers, decimal f64 literals,
-double-quoted data literals, lists, and `.` as the unit literal. The public
+double-quoted data literals, lists, and `unit` as Termis's sole unit notation:
+it denotes `UnitType` in type position and its only value in value position.
+The public
 definition forms (`type`, `function`, `macro`, `constant`, and `variable`) are
 top-level macros that expand into compiler definition forms. Discovery is
 ordered so macros can affect later source forms, while body analysis is deferred

@@ -42,7 +42,7 @@
 (in-suite :termis)
 
 (test reads-atoms
-  (let ((forms (read-source (make-source "atoms.termis" "foo 42 -42 3.14 \"hello\" ."))))
+  (let ((forms (read-source (make-source "atoms.termis" "foo 42 -42 3.14 \"hello\" unit"))))
     (is (= 6 (length forms)))
     (is (string= "foo" (termis-symbol-name (syntax-datum (first forms)))))
     (is (= 42 (syntax-datum (second forms))))
@@ -67,12 +67,14 @@
 
 (test rejects-dot-prefixed-floats
   (signals termis-read-error
-    (read-source (make-source "invalid.termis" ".5"))))
+    (read-source (make-source "invalid.termis" ".5")))
+  (signals termis-read-error
+    (read-source (make-source "invalid.termis" "."))))
 
 (test retains-multiple-source-forms-in-a-compilation-unit
   (let ((module (compile-string
 		 (make-compiler)
-		 (format nil "(type Point (x f32) (y f32))~%(function origin () Point .)")
+		 (format nil "(type Point (x f32) (y f32))~%(function origin () Point unit)")
 		 :name "repl.termis")))
     (is (typep module 'compilation-unit))
     (is (string= "repl.termis" (source-name (module-source module))))

@@ -82,7 +82,12 @@
                       do (write-char (reader-advance state) output)))))
     (when (string= text "")
       (reader-fail state "expected a form" start))
-    (cond ((integer-literal-p text)
+    (cond ((string= text "unit")
+           ;; UNIT is the one source spelling shared by UnitType and its
+           ;; only inhabitant.  The semantic phase assigns its meaning from
+           ;; context; the reader records the atom without host symbols.
+           (make-unit-literal))
+          ((integer-literal-p text)
            (handler-case
                (parse-integer text)
              (error () (reader-fail state "integer literal is out of range" start))))
@@ -94,7 +99,7 @@
            (reader-fail state
                         (if (some #'digit-char-p text)
                             "invalid numeric literal"
-                            "'.' is reserved for the unit literal")
+                            "'.' is not valid Termis syntax; use `unit`")
                         start))
           (t (make-termis-name text)))))
 
@@ -148,7 +153,7 @@
                   (if (and (< (1+ start) (length (reader-contents state)))
                            (digit-char-p (char (reader-contents state) (1+ start))))
                       (reader-fail state "floating-point literals must start with a digit")
-                      (progn (reader-advance state) (make-unit-literal))))
+                      (reader-fail state "'.' is not valid Termis syntax; use `unit`" start)))
                  (t (read-atom state start)))))
     (make-instance 'syntax
                    :datum datum

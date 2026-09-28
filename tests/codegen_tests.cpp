@@ -38,7 +38,7 @@ void emits_let_do_and_unit() {
     (fn log () unit
       (do
         .
-        .))
+        unit))
     (fn value () i64
       (let ((x 40)
             (y 2))

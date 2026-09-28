@@ -19,7 +19,7 @@ void require(bool condition, std::string_view message) {
 }
 
 void parses_atoms() {
-  const auto forms = termis::read_forms("alpha 42 -7 1.5 \"hi\\nthere\" .");
+  const auto forms = termis::read_forms("alpha 42 -7 1.5 \"hi\\nthere\" unit");
 
   require(forms.size() == 6, "expected six forms");
   require(as<termis::Symbol>(*forms[0]).name == "alpha", "expected symbol");
@@ -31,7 +31,7 @@ void parses_atoms() {
 }
 
 void parses_lists() {
-  const auto forms = termis::read_forms("(fn noop () unit .)");
+  const auto forms = termis::read_forms("(fn noop () unit unit)");
 
   require(forms.size() == 1, "expected one top-level form");
   const auto& list = as<termis::List>(*forms[0]);
@@ -39,12 +39,13 @@ void parses_lists() {
   require(as<termis::Symbol>(*list.elements[0]).name == "fn", "expected fn symbol");
   require(as<termis::Symbol>(*list.elements[1]).name == "noop", "expected function name");
   require(as<termis::List>(*list.elements[2]).elements.empty(), "expected empty parameter list");
-  require(as<termis::Symbol>(*list.elements[3]).name == "unit", "expected unit type symbol");
+  require(std::holds_alternative<termis::UnitLiteral>(list.elements[3]->kind),
+          "expected unit type");
   require(std::holds_alternative<termis::UnitLiteral>(list.elements[4]->kind), "expected unit body");
 }
 
 void parses_unit_inside_lists() {
-  const auto forms = termis::read_forms("(a . b)");
+  const auto forms = termis::read_forms("(a unit b)");
 
   require(forms.size() == 1, "expected one top-level form");
   const auto& list = as<termis::List>(*forms[0]);

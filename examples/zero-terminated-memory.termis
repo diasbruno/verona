@@ -22,12 +22,12 @@
       (true
         (do
           (put-char (+ value 48))
-          .))
+          unit))
       (false
         (do
           (print-positive-i64 (/ value 10))
           (put-char (+ (digit value) 48))
-          .))))
+          unit))))
 
   (fn print-i64
     ((params ((value i64)))
@@ -38,7 +38,7 @@
         (do
           (put-char 45)
           (print-positive-i64 (- 0 value))
-          .))
+          unit))
       (false
         (print-positive-i64 value))))
 
