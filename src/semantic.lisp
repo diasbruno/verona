@@ -13,6 +13,12 @@
 
 (defclass semantic-scope ()
   ((parent :initarg :parent :initform nil :reader semantic-scope-parent)
+   ;; The program is stored at the root scope and inherited by lookup.  It
+   ;; lets references retain source-declaration identity while still finding
+   ;; the declaration's resolved type.
+   (program :initarg :program :initform nil :accessor semantic-scope-program)
+   (type-context :initarg :type-context :initform nil
+                 :accessor semantic-scope-type-context)
    (bindings :initform '() :accessor semantic-scope-bindings)))
 
 (defun make-semantic-scope (&optional parent)
@@ -25,6 +31,19 @@
   "Create a lexical semantic child of SCOPE."
   (check-type scope semantic-scope)
   (make-semantic-scope scope))
+
+(defun semantic-scope-owning-program (scope)
+  (loop for current = scope then (semantic-scope-parent current)
+        while current
+        for program = (semantic-scope-program current)
+        when program return program))
+
+(defun semantic-scope-owning-type-context (scope)
+  "Find the canonical type context inherited by SCOPE."
+  (loop for current = scope then (semantic-scope-parent current)
+        while current
+        for context = (semantic-scope-type-context current)
+        when context return context))
 
 (defun semantic-scope-local-find (scope name)
   "Return the binding local to SCOPE for NAME, plus a presence flag."

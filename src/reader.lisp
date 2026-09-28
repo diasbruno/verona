@@ -87,6 +87,8 @@
            ;; only inhabitant.  The semantic phase assigns its meaning from
            ;; context; the reader records the atom without host symbols.
            (make-unit-literal))
+          ((string= text "true") (make-termis-boolean-literal t))
+          ((string= text "false") (make-termis-boolean-literal nil))
           ((integer-literal-p text)
            (handler-case
                (parse-integer text)

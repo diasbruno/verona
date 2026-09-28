@@ -29,6 +29,9 @@
    #:termis-symbol-name
    #:unit-literal
    #:unit-literal-p
+   #:termis-boolean-literal
+   #:termis-boolean-literal-p
+   #:termis-boolean-literal-value
    #:termis-list
    #:make-termis-list
    #:termis-list-p
@@ -103,6 +106,8 @@
    #:semantic-scope-find
    #:semantic-scope-lookup
    #:semantic-scope-child
+   #:semantic-scope-owning-program
+   #:semantic-scope-owning-type-context
    #:semantic-program
    #:semantic-program-bootstrap-scope
    #:semantic-program-module-scope
@@ -135,13 +140,40 @@
    #:semantic-function-declaration-body
    #:semantic-expression
    #:semantic-expression-syntax
+   #:semantic-expression-type
+   #:expression
+   #:expression-syntax
+   #:expression-source
+   #:expression-type
    #:semantic-literal
+   #:unit-expression
+   #:boolean-literal
+   #:integer-literal
+   #:integer-literal-value
+   #:float-literal
+   #:float-literal-value
+   #:string-literal
+   #:string-literal-value
    #:semantic-reference
    #:semantic-reference-name
    #:semantic-reference-binding
+   #:reference-expression
    #:semantic-call
    #:semantic-call-callee
    #:semantic-call-arguments
+   #:call-expression
+   #:sequence-expression
+   #:sequence-expression-expressions
+   #:address-expression
+   #:address-expression-operand
+   #:dereference-expression
+   #:dereference-expression-operand
+   #:assignment-expression
+   #:assignment-expression-target
+   #:assignment-expression-value
+   #:place-expression
+   #:place-expression-addressable-p
+   #:place-expression-writable-p
    #:semantic-type-syntax
    #:semantic-unit-type-syntax
    #:semantic-pointer-type-syntax
@@ -149,6 +181,7 @@
    #:termis-type
    #:unit-type
    #:boolean-type
+   #:string-type
    #:integer-type
    #:integer-type-signed
    #:integer-type-width
@@ -165,6 +198,7 @@
    #:make-type-context
    #:type-context-unit-type
    #:type-context-boolean-type
+   #:type-context-string-type
    #:type-context-integer-type
    #:type-context-float-type
    #:type-context-pointer-type
@@ -173,10 +207,26 @@
    #:builtin-type-binding
    #:builtin-type-binding-type
    #:builtin-type-declaration
+   #:builtin-intrinsic-binding
+   #:builtin-intrinsic-binding-type
    #:expected-type-error
    #:expected-type-error-binding
    #:resolve-type
    #:resolve-types
+   #:infer-expression
+   #:check-expression
+   #:same-type-p
+   #:compatible-p
+   #:type-mismatch-error
+   #:type-mismatch-error-actual
+   #:type-mismatch-error-expected
+   #:semantic-not-callable-error
+   #:wrong-argument-count-error
+   #:wrong-argument-count-error-expected
+   #:wrong-argument-count-error-actual
+   #:not-addressable-error
+   #:not-writable-error
+   #:invalid-expression-error
    #:build-semantic-expression
    #:resolve-compilation-unit
    #:definition-form-p

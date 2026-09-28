@@ -50,6 +50,12 @@
 
 (defstruct unit-literal)
 
+;; Keep boolean spelling distinct from names before semantic analysis.  This
+;; avoids accidentally resolving TRUE or FALSE through a lexical scope.
+(defstruct (termis-boolean-literal
+            (:constructor make-termis-boolean-literal (value)))
+  (value nil :type boolean))
+
 (defstruct (termis-list (:constructor %make-termis-list (elements)))
   "A Termis list value.  Its elements are source-aware SYNTAX objects."
   (elements '() :type list))

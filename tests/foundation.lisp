@@ -33,8 +33,16 @@
 		#:semantic-function-declaration-return-type
 		#:semantic-function-declaration-type
 		#:semantic-function-declaration-body
+		#:semantic-constant-declaration-initializer
+		#:semantic-variable-declaration-initializer
 		#:semantic-reference #:semantic-reference-binding
 		#:semantic-call #:semantic-call-callee #:semantic-call-arguments
+		#:semantic-expression-type #:expression-source
+		#:integer-literal #:boolean-literal #:string-literal
+		#:sequence-expression #:sequence-expression-expressions
+		#:assignment-expression #:assignment-expression-target
+		#:address-expression #:dereference-expression
+		#:place-expression-addressable-p #:place-expression-writable-p
 		#:parameter-binding #:parameter-binding-type-reference #:parameter-binding-type
 		#:semantic-variable-declaration #:semantic-variable-declaration-type
 		#:semantic-constant-declaration #:semantic-constant-declaration-type
@@ -42,6 +50,7 @@
 		#:float-type #:float-type-width #:pointer-type #:pointer-type-target
 		#:function-type #:function-type-parameters #:function-type-result
 		#:defined-type #:defined-type-declaration #:expected-type-error
+		#:type-mismatch-error #:not-writable-error #:not-addressable-error
 		#:make-semantic-scope #:semantic-scope-child #:semantic-scope-bind
 		#:semantic-scope-lookup
 		#:unresolved-name-error #:duplicate-local-binding-error))
@@ -84,7 +93,7 @@
 (test retains-multiple-source-forms-in-a-compilation-unit
   (let ((module (compile-string
 		 (make-compiler)
-		 (format nil "(type Point (x f32) (y f32))~%(function origin () Point unit)")
+		 (format nil "(type Point (x f32) (y f32))~%(function origin () i32 1)")
 		 :name "repl.termis")))
     (is (typep module 'compilation-unit))
     (is (string= "repl.termis" (source-name (module-source module))))
@@ -438,11 +447,11 @@
   (let* ((unit (compile-string
                 (make-compiler)
                 "(type Node (value i32) (next (pointer Node)))\
-                 (variable current (pointer Node) unit)\
+                 (variable current (pointer Node) (deref (& current)))\
                  (function distance ((a (pointer Node))\
-                                     (b (pointer (pointer i32)))) f64 unit)\
+                                     (b (pointer (pointer i32)))) f64 3.14)\
                  (function another-distance ((a (pointer Node))\
-                                             (b (pointer (pointer i32)))) f64 unit)\
+                                             (b (pointer (pointer i32)))) f64 3.14)\
                  (function nothing () unit unit)"))
          (declarations (unit-declarations unit))
          (node (first declarations))
@@ -491,7 +500,7 @@
 
 (test bootstraps-a-canonical-boolean-type
   (let* ((unit (compile-string (make-compiler)
-                               "(function predicate ((value bool)) bool unit)"))
+                               "(function predicate ((value bool)) bool true)"))
          (semantic (semantic-program-declaration
                     (compilation-unit-semantic-program unit)
                     (first (unit-declarations unit))))
@@ -507,6 +516,54 @@
                     (compilation-unit-semantic-program unit)
                     (first (unit-declarations unit)))))
     (is (typep (semantic-function-declaration-return-type semantic) 'unit-type))))
+
+(test analyzes-typed-expressions-and-contextual-initializers
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(constant initial i32 0)\
+                 (variable counter i32 initial)\
+                 (function add ((a i32) (b i32)) i32 (+ a b))\
+                 (function increment ((value i32)) i32 (add value 1))\
+                 (function reset () unit (do (assign counter 0) unit))\
+                 (function main () i32 (increment counter))"))
+         (declarations (unit-declarations unit))
+         (program (compilation-unit-semantic-program unit))
+         (initial (semantic-program-declaration program (first declarations)))
+         (counter (semantic-program-declaration program (second declarations)))
+         (add (semantic-program-declaration program (third declarations)))
+         (increment (semantic-program-declaration program (fourth declarations)))
+         (reset (semantic-program-declaration program (fifth declarations)))
+         (main (semantic-program-declaration program (sixth declarations)))
+         (initializer (semantic-constant-declaration-initializer initial))
+         (add-body (semantic-function-declaration-body add))
+         (increment-body (semantic-function-declaration-body increment))
+         (reset-body (semantic-function-declaration-body reset))
+         (assignment (first (sequence-expression-expressions reset-body))))
+    (is (typep initializer 'integer-literal))
+    (is (eq (semantic-constant-declaration-type initial)
+            (semantic-expression-type initializer)))
+    (is (typep (semantic-variable-declaration-initializer counter) 'semantic-reference))
+    (is (typep add-body 'semantic-call))
+    (is (eq (semantic-function-declaration-return-type add)
+            (semantic-expression-type add-body)))
+    (is (typep (second (semantic-call-arguments increment-body)) 'integer-literal))
+    (is (typep reset-body 'sequence-expression))
+    (is (typep assignment 'assignment-expression))
+    (is (eq (semantic-function-declaration-return-type reset)
+            (semantic-expression-type reset-body)))
+    (is (typep (semantic-function-declaration-body main) 'semantic-call))
+    ;; Nested expressions retain the exact syntax that produced them.
+    (is (not (null (expression-source assignment))))))
+
+(test diagnoses-type-mismatches-and-invalid-places
+  (signals type-mismatch-error
+    (compile-string (make-compiler) "(function wrong () i32 false)"))
+  (signals not-writable-error
+    (compile-string (make-compiler)
+                    "(constant answer i32 42) (function change () unit (assign answer 1))"))
+  (signals not-addressable-error
+    (compile-string (make-compiler)
+                    "(function address () (pointer i32) (& (+ 1 2)))")))
 
 (defun run-tests ()
   (run! :termis))
