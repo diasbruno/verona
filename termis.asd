@@ -28,7 +28,8 @@
   :depends-on (#:termis #:fiveam)
   :serial t
   :components ((:file "tests/foundation")
-               (:file "tests/examples")))
+               (:file "tests/examples")
+               (:file "tests/modules")))
 
 (asdf:defsystem #:termis/llvm-tests
   :description "FiveAM integration tests for the Termis LLVM backend"

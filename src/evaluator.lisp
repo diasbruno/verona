@@ -106,7 +106,13 @@ IMPLEMENTATION must return one SYNTAX object."
       (let ((elements (termis-list-elements datum)))
         (when elements
           (let ((head (syntax-datum (first elements))))
-            (when (termis-name-p head)
+            (when (or (termis-name-p head) (qualified-name-p head))
+              ;; Qualified macro names are represented structurally in syntax,
+              ;; but evaluator bindings intentionally remain ordinary local
+              ;; keys.  The compiler installs this unambiguous local spelling
+              ;; only for exported imported macros.
+              (when (qualified-name-p head)
+                (setf head (make-termis-name (qualified-name-string head))))
               (multiple-value-bind (value foundp)
                   (environment-find environment head)
                 (and foundp (termis-macro-p value) value)))))))))

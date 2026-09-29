@@ -1,6 +1,6 @@
 (defpackage #:termis
   (:use #:cl)
-  (:shadow #:compile-file #:declaration)
+  (:shadow #:compile-file #:declaration #:import)
   (:export
    #:compiler
    #:make-compiler
@@ -25,6 +25,18 @@
    #:termis-name-p
    #:termis-name-value
    #:termis-name=
+   #:module-name
+   #:make-module-name
+   #:module-name-p
+   #:module-name-components
+   #:module-name=
+   #:module-name-string
+   #:qualified-name
+   #:make-qualified-name
+   #:qualified-name-p
+   #:qualified-name-qualifier
+   #:qualified-name-name
+   #:qualified-name-string
    #:termis-symbol
    #:termis-symbol-name
    #:unit-literal
@@ -67,6 +79,22 @@
    #:compilation-unit-compile-time-environment
    #:compilation-unit-semantic-program
    #:module
+   #:module-name
+   #:module-pathname
+   #:module-identity-explicit-p
+   #:module-imports
+   #:module-exports
+   #:module-find-export
+   #:import
+   #:import-module
+   #:import-alias
+   #:module-loader
+   #:module-loader-search-paths
+   #:module-loader-loaded-modules
+   #:module-loader-load
+   #:module-graph
+   #:module-graph-modules
+   #:module-graph-edges
    #:module-source
    #:module-forms
    #:module-declarations
@@ -124,6 +152,12 @@
    #:semantic-program-declarations
    #:semantic-program-declaration
    #:semantic-program-type-context
+   #:program
+   #:program-entry-module
+   #:program-modules
+   #:program-module-graph
+   #:program-target
+   #:semantic-program-module-scope-for
    #:make-bootstrap-semantic-scope
    #:parameter-binding
    #:parameter-binding-syntax
@@ -389,6 +423,7 @@
    #:termis-type-name
    #:build-semantic-expression
    #:resolve-compilation-unit
+   #:resolve-program
    #:definition-form-p
    #:process-definition
    #:expand-top-level
@@ -409,6 +444,21 @@
    #:invalid-definition-context-error
    #:compile-string
    #:compile-file
+   #:compile-module
+   #:compiler-search-paths
+   #:module-error
+   #:module-not-found
+   #:duplicate-module
+   #:circular-module-dependency
+   #:circular-module-dependency-cycle
+   #:duplicate-import-alias
+   #:duplicate-import-alias-alias
+   #:unknown-export
+   #:unknown-export-name
+   #:unknown-module-qualifier
+   #:module-not-imported
+   #:unknown-module-member
+   #:private-declaration-access
    #:source-error
    #:termis-read-error
    #:termis-read-error-source

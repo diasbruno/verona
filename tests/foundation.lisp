@@ -3,6 +3,8 @@
   (:shadowing-import-from #:termis #:compile-file)
   (:import-from #:termis
 		#:compile-string #:make-compiler #:make-source
+		#:compile-module #:module #:module-name #:module-name-string
+		#:program-modules #:qualified-name-p #:qualified-name-qualifier #:qualified-name-name
 		#:compilation-unit #:compilation-unit-source #:compilation-unit-forms
 		#:compilation-unit-semantic-program
 		#:unit-declarations #:find-declaration

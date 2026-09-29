@@ -75,6 +75,33 @@
          (decimal-digits-p text sign-end dot)
          (decimal-digits-p text (1+ dot) (length text)))))
 
+(defun read-module-name-text (state text start)
+  "Parse dotted module spelling only where the grammar requests it."
+  (let ((components '()) (component-start 0))
+    (labels ((finish-component (end)
+               (when (= component-start end)
+                 (reader-fail state "module name contains an empty component" start))
+               (push (make-termis-name (subseq text component-start end)) components)))
+      (loop for index from 0 below (length text)
+            when (char= (char text index) #\.)
+              do (finish-component index) (setf component-start (1+ index)))
+      (finish-component (length text)))
+    (apply #'make-module-name (nreverse components))))
+
+(defun read-qualified-name-text (state text start)
+  (let ((separator (position #\: text)))
+    (when (or (null separator)
+              (= separator 0)
+              (= separator (1- (length text)))
+              (position #\: text :start (1+ separator)))
+      (reader-fail state "qualified names use exactly one ':'" start))
+    (let ((member (subseq text (1+ separator))))
+      (when (find #\. member)
+        (reader-fail state "the member of a qualified name must be a name" start))
+      (make-qualified-name
+       (read-module-name-text state (subseq text 0 separator) start)
+       (make-termis-name member)))))
+
 (defun read-atom (state start)
   (let ((text (with-output-to-string (output)
                 (loop for character = (reader-peek state)
@@ -97,12 +124,15 @@
            ;; The grammar has no exponent notation; appending D0 makes the
            ;; resulting Common Lisp number the language's f64 representation.
            (read-from-string (concatenate 'string text "d0")))
+          ((string= text ":as") (make-termis-name text))
+          ((find #\: text) (read-qualified-name-text state text start))
           ((find #\. text)
-           (reader-fail state
-                        (if (some #'digit-char-p text)
-                            "invalid numeric literal"
-                            "'.' is not valid Termis syntax; use `unit`")
-                        start))
+           ;; Dots are meaningful only when an enclosing grammar production
+           ;; asks for a module name.  Keep the atom opaque here; IMPORT
+           ;; validates it as a ModuleName later.
+           (if (some #'digit-char-p text)
+               (reader-fail state "invalid numeric literal" start)
+               (make-termis-name text)))
           (t (make-termis-name text)))))
 
 (defun read-string-literal (state start)

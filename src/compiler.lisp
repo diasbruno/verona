@@ -1,9 +1,10 @@
 (in-package #:termis)
 
-(defclass compiler () ())
+(defclass compiler ()
+  ((search-paths :initarg :search-paths :initform '() :reader compiler-search-paths)))
 
-(defun make-compiler ()
-  (make-instance 'compiler))
+(defun make-compiler (&key (search-paths '()))
+  (make-instance 'compiler :search-paths (mapcar #'pathname search-paths)))
 
 (defclass compilation-unit ()
   ((source :initarg :source
@@ -37,7 +38,73 @@
 ;; legacy class as a compatibility subclass while new callers use
 ;; COMPILATION-UNIT, which does not prematurely imply package or import
 ;; semantics.
-(defclass module (compilation-unit) ())
+(defclass module (compilation-unit)
+  ((name :initarg :name :reader module-name)
+   (pathname :initarg :pathname :initform nil :reader module-pathname)
+   (imports :initform '() :accessor module-imports)
+   (import-table :initform '() :accessor module-import-table)
+   (export-names :initform '() :accessor module-export-names)
+   (exports :initform '() :accessor module-exports)
+   (identity-explicit-p :initarg :identity-explicit-p :initform t
+                        :reader module-identity-explicit-p)))
+
+(defclass import ()
+  ((module :initarg :module :reader import-module)
+   (alias :initarg :alias :initform nil :reader import-alias)
+   (source :initarg :source :reader import-source)))
+
+(defclass module-loader ()
+  ((search-paths :initarg :search-paths :reader module-loader-search-paths)
+   (loaded-modules :initform '() :accessor module-loader-loaded-modules)
+   (loading-stack :initform '() :accessor module-loader-loading-stack)))
+
+(defclass module-graph ()
+  ((modules :initarg :modules :reader module-graph-modules)
+   (edges :initarg :edges :reader module-graph-edges)))
+
+(define-condition module-error (error)
+  ((module :initarg :module :initform nil :reader module-error-module)
+   (source :initarg :source :initform nil :reader module-error-source)))
+(define-condition module-not-found (module-error) ())
+(define-condition duplicate-module (module-error) ())
+(define-condition circular-module-dependency (module-error)
+  ((cycle :initarg :cycle :reader circular-module-dependency-cycle)))
+(define-condition duplicate-import-alias (module-error)
+  ((alias :initarg :alias :reader duplicate-import-alias-alias)))
+(define-condition unknown-export (module-error)
+  ((name :initarg :name :reader unknown-export-name)))
+
+(defun parse-module-name (syntax)
+  "Turn import syntax into a ModuleName without making ordinary names modules."
+  (let ((datum (syntax-datum syntax)))
+    (unless (termis-name-p datum)
+      (error 'module-error :source syntax :module nil))
+    (let ((text (termis-name-value datum)))
+      (when (or (string= text "")
+                (some (lambda (component) (string= component ""))
+                      (uiop:split-string text :separator ".")))
+        (error 'module-error :source syntax :module nil))
+      (apply #'make-module-name
+             (mapcar #'make-termis-name (uiop:split-string text :separator "."))))))
+
+(defun module-name-from-pathname (pathname)
+  (let ((name (pathname-name (pathname pathname))))
+    (unless name (error 'module-error :module nil))
+    (parse-module-name
+     (make-syntax (make-termis-name name)
+                  (make-source (namestring pathname) "")
+                  (make-source-location) (make-source-location)))))
+
+(defun import-qualifier-name (import)
+  (or (import-alias import)
+      (make-termis-name (module-name-string (module-name (import-module import))))))
+
+(defun module-find-import (module qualifier)
+  (find qualifier (module-imports module) :key #'import-qualifier-name
+        :test #'termis-name=))
+
+(defun module-find-export (module name)
+  (cdr (assoc name (module-exports module) :test #'termis-name=)))
 
 (defclass declaration (semantic-binding)
   (;; SOURCE is the original complete top-level form, not a resolved compiler
@@ -321,11 +388,19 @@ expands syntax; this processor is the boundary that creates compiler objects."
              (let ((arguments (definition-elements expanded-syntax "implementation" 4)))
                (unless (= (length arguments) 4)
                  (definition-fail expanded-syntax "%implementation requires a generic name, parameters, return type, and body"))
-               (make-declaration 'implementation-declaration
-                                 (definition-name expanded-syntax (first arguments))
-                                 :generic-name (definition-name expanded-syntax (first arguments))
-                                 :parameters (second arguments) :return-type (third arguments)
-                                 :body (fourth arguments))))))))
+               (let ((target (syntax-datum (first arguments))))
+                 (unless (or (termis-name-p target) (qualified-name-p target))
+                   (definition-fail expanded-syntax "implementation target must be a name"))
+                 ;; Implementations do not occupy the ordinary declaration
+                 ;; namespace.  Keep a local Name for diagnostics while
+                 ;; retaining a structured QualifiedName target for the
+                 ;; ownership validation in semantic resolution.
+                 (make-declaration 'implementation-declaration
+                                   (if (qualified-name-p target)
+                                       (qualified-name-name target) target)
+                                   :generic-name target
+                                   :parameters (second arguments) :return-type (third arguments)
+                                   :body (fourth arguments)))))))))
 
 (defun expand-top-level (syntax environment)
   "Expand SYNTAX into a TOP-LEVEL-EXPANSION-RESULT.
@@ -366,20 +441,129 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
         (make-top-level-expansion-result definitions))))
     environment))
 
-(defun compile-source (source)
-  (let* ((forms (read-source source))
-         (environment (make-compilation-environment))
-         (unit (make-instance 'module :source source :forms forms
-                                      :environment environment)))
+(defun top-level-form-head (form)
+  (let ((datum (syntax-datum form)))
+    (when (termis-list-p datum)
+      (let ((head (first (termis-list-elements datum))))
+        (and head (termis-name-p (syntax-datum head))
+             (termis-name-value (syntax-datum head)))))))
+
+(defun parse-import-form (form loader)
+  (let ((arguments (rest (termis-list-elements (syntax-datum form)))))
+    (unless (or (= (length arguments) 1) (= (length arguments) 3))
+      (error 'module-error :source form))
+    (let ((name (parse-module-name (first arguments)))
+          (alias nil))
+      (when (= (length arguments) 3)
+        (unless (and (termis-name-p (syntax-datum (second arguments)))
+                     (string= (termis-name-value (syntax-datum (second arguments))) ":as")
+                     (termis-name-p (syntax-datum (third arguments))))
+          (error 'module-error :source form))
+        (setf alias (syntax-datum (third arguments))))
+      (make-instance 'import :module (module-loader-load loader name)
+                            :alias alias :source form))))
+
+(defun parse-export-form (form)
+  (let ((names (rest (termis-list-elements (syntax-datum form)))))
+    (dolist (name names)
+      (unless (termis-name-p (syntax-datum name))
+        (error 'module-error :source name)))
+    (mapcar #'syntax-datum names)))
+
+(defun install-imported-macros (module import)
+  "Only macros cross the evaluator boundary; semantic bindings stay separate."
+  (dolist (entry (module-exports (import-module import)))
+    (let ((declaration (cdr entry)))
+      (when (typep declaration 'macro-declaration)
+        (let ((local-name
+                (make-termis-name
+                 (format nil "~A:~A"
+                         (termis-name-value (import-qualifier-name import))
+                         (termis-name-value (car entry))))))
+          (multiple-value-bind (value foundp)
+              (environment-find (module-environment (import-module import))
+                                (car entry))
+            (when foundp
+              (environment-bind (module-environment module) local-name value))))))))
+
+(defun register-import (module import)
+  (let ((qualifier (import-qualifier-name import)))
+    (when (module-find-import module qualifier)
+      (error 'duplicate-import-alias :module module :source (import-source import)
+             :alias qualifier))
+    (push import (module-imports module))
+    (push (cons qualifier import) (module-import-table module))
+    (install-imported-macros module import)
+    import))
+
+(defun resolve-module-exports (module)
+  (dolist (name (module-export-names module))
+    (multiple-value-bind (declaration foundp) (find-declaration module name)
+      (unless foundp
+        (error 'unknown-export :module module :name name))
+      (push (cons name declaration) (module-exports module))))
+  (setf (module-exports module) (nreverse (module-exports module)))
+  module)
+
+(defun collect-module (module loader)
+  (let ((environment (module-environment module)))
     ;; Only top-level forms reach the definition processor.  Expansion is
     ;; sequential because a preceding %MACRO can affect a following form.
-    (dolist (form forms unit)
-      (dolist (expanded-syntax
-               (top-level-expansion-result-definitions
-                (expand-top-level form environment)))
-        (process-definition environment unit form expanded-syntax)))
-    (resolve-compilation-unit unit)
-    unit))
+    (dolist (form (module-forms module))
+      (cond ((string= (or (top-level-form-head form) "") "import")
+             (register-import module (parse-import-form form loader)))
+            ((string= (or (top-level-form-head form) "") "export")
+             (setf (module-export-names module)
+                   (append (module-export-names module) (parse-export-form form))))
+            (t (dolist (expanded-syntax
+                         (top-level-expansion-result-definitions
+                          (expand-top-level form environment)))
+                 (process-definition environment module form expanded-syntax)))))
+    (resolve-module-exports module)
+    module))
+
+(defun module-loader-find (loader name)
+  (cdr (assoc name (module-loader-loaded-modules loader) :test #'module-name=)))
+
+(defun module-source-pathname (loader name)
+  (let ((filename (format nil "~A.termis" (module-name-string name))))
+    (find-if #'probe-file
+             (mapcar (lambda (root) (merge-pathnames filename root))
+                     (module-loader-search-paths loader)))))
+
+(defun module-loader-load (loader name)
+  (let ((position (position name (module-loader-loading-stack loader)
+                           :test #'module-name=)))
+    (when position
+      (error 'circular-module-dependency :module name
+             :cycle (append (subseq (module-loader-loading-stack loader) position)
+                            (list name))))
+    (or (module-loader-find loader name)
+        (let ((path (module-source-pathname loader name)))
+          (unless path (error 'module-not-found :module name))
+          (let* ((source (source-from-file path))
+                 (module (make-instance 'module :name name :pathname path
+                                         :source source :forms (read-source source)
+                                         :environment (make-compilation-environment))))
+            ;; Cache before collecting dependencies: identity is stable even
+            ;; while its declaration namespace is being assembled.
+            (push (cons name module) (module-loader-loaded-modules loader))
+            (let ((old-stack (module-loader-loading-stack loader)))
+              (unwind-protect
+                   (progn
+                     (setf (module-loader-loading-stack loader) (append old-stack (list name)))
+                     (collect-module module loader))
+                (setf (module-loader-loading-stack loader) old-stack)))
+            module)))))
+
+(defun compile-source (source)
+  (let* ((name (make-module-name (make-termis-name "string")))
+         (module (make-instance 'module :name name :identity-explicit-p nil
+                                :source source :forms (read-source source)
+                                :environment (make-compilation-environment))))
+    (collect-module module (make-instance 'module-loader :search-paths '()))
+    (resolve-program module (list module))
+    module))
 
 (defun compile-string (compiler contents &key (name "<string>"))
   "Read and discover primitive top-level declarations in CONTENTS."
@@ -389,4 +573,29 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
 (defun compile-file (compiler pathname)
   "Read and discover primitive top-level declarations in PATHNAME."
   (check-type compiler compiler)
-  (compile-source (source-from-file pathname)))
+  (let* ((path (pathname pathname))
+         (entry-name (module-name-from-pathname path))
+         (loader (make-instance 'module-loader
+                                :search-paths
+                                (cons (make-pathname :name nil :type nil :defaults path)
+                                      (compiler-search-paths compiler))))
+         (entry (module-loader-load loader entry-name))
+         ;; Recursive loading pushes a dependency after its importer has been
+         ;; cached, so the cache's final order is already dependencies-first.
+         (modules (mapcar #'cdr (module-loader-loaded-modules loader))))
+    (resolve-program entry modules)
+    entry))
+
+(defun compile-module (compiler name)
+  "Compile module NAME from COMPILER's ordered module search paths."
+  (check-type compiler compiler)
+  (let* ((module-name (if (module-name-p name) name
+                          (parse-module-name
+                           (make-syntax (make-termis-name name)
+                                        (make-source "<module>" "")
+                                        (make-source-location) (make-source-location)))))
+         (loader (make-instance 'module-loader :search-paths (compiler-search-paths compiler)))
+         (entry (module-loader-load loader module-name))
+         (modules (mapcar #'cdr (module-loader-loaded-modules loader))))
+    (resolve-program entry modules)
+    entry))

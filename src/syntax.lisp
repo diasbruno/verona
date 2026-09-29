@@ -31,6 +31,41 @@
   "A case-sensitive Termis identifier, independent of Common Lisp symbols."
   (value "" :type string))
 
+(defstruct (module-name (:constructor %make-module-name (components)))
+  "The semantic identity of a Termis module.
+
+COMPONENTS are Termis names, never host symbols or filesystem pathnames."
+  (components '() :type list))
+
+(defun make-module-name (&rest components)
+  (dolist (component components)
+    (check-type component termis-name))
+  (when (null components)
+    (error "a module name requires at least one component"))
+  (%make-module-name components))
+
+(defun module-name= (left right)
+  (and (module-name-p left) (module-name-p right)
+       (= (length (module-name-components left))
+          (length (module-name-components right)))
+       (every #'termis-name= (module-name-components left)
+              (module-name-components right))))
+
+(defun module-name-string (name)
+  (check-type name module-name)
+  (format nil "~{~A~^.~}" (mapcar #'termis-name-value
+                                   (module-name-components name))))
+
+(defstruct (qualified-name (:constructor make-qualified-name (qualifier name)))
+  "A structured MODULE:NAME reference; it is deliberately not a Termis name."
+  (qualifier (error "qualified name needs a qualifier") :type module-name)
+  (name (error "qualified name needs a name") :type termis-name))
+
+(defun qualified-name-string (name)
+  (check-type name qualified-name)
+  (format nil "~A:~A" (module-name-string (qualified-name-qualifier name))
+          (termis-name-value (qualified-name-name name))))
+
 (defun termis-name= (left right)
   "Whether LEFT and RIGHT denote the same case-sensitive Termis name."
   (and (termis-name-p left)

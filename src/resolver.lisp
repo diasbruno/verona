@@ -297,7 +297,26 @@ the semantic type of a unit expression remains UnitType."
    (type-context :initarg :type-context :reader semantic-program-type-context)
    ;; Entries map source declarations to their resolved counterpart.  Macro
    ;; declarations deliberately have no entry: they belong to expansion.
-   (declarations :initform '() :accessor semantic-program-declarations)))
+   (declarations :initform '() :accessor semantic-program-declarations)
+   (entry-module :initarg :entry-module :initform nil :reader program-entry-module)
+   (modules :initarg :modules :initform '() :reader program-modules)
+   (module-graph :initarg :module-graph :initform nil :reader program-module-graph)
+   (target :initarg :target :initform nil :reader program-target)
+   (module-scopes :initform '() :accessor semantic-program-module-scopes)))
+
+;; PROGRAM is the multi-module semantic root.  It remains a SemanticProgram so
+;; existing lowering clients continue to accept the returned object.
+(defclass program (semantic-program) ())
+
+(defun semantic-program-module-scope-for (program module)
+  (or (cdr (assoc module (semantic-program-module-scopes program) :test #'eq))
+      (error "no semantic scope for module ~S" module)))
+
+(defun semantic-scope-owning-module (scope)
+  (loop for current = scope then (semantic-scope-parent current)
+        while current
+        for module = (semantic-scope-module current)
+        when module return module))
 
 (defclass semantic-declaration ()
   ((source-declaration :initarg :source-declaration
@@ -618,15 +637,62 @@ than recovered later through ad-hoc string comparisons."
                                suffix))))))))
       scope)))
 
+(define-condition unknown-module-qualifier (semantic-error)
+  ((qualifier :initarg :qualifier :reader unknown-module-qualifier-qualifier)))
+(define-condition module-not-imported (semantic-error)
+  ((current-module :initarg :current-module :reader module-not-imported-current-module)
+   (referenced-module :initarg :referenced-module :reader module-not-imported-referenced-module)))
+(define-condition unknown-module-member (semantic-error)
+  ((module :initarg :module :reader unknown-module-member-module)
+   (name :initarg :name :reader unknown-module-member-name)))
+(define-condition private-declaration-access (semantic-error)
+  ((module :initarg :module :reader private-declaration-access-module)
+   (name :initarg :name :reader private-declaration-access-name)))
+
+(defun imported-binding (program imported declaration)
+  (let ((semantic (semantic-program-declaration program declaration)))
+    (if (typep semantic 'semantic-generic-declaration)
+        (let ((scope (semantic-program-module-scope-for program imported)))
+          (semantic-scope-lookup scope (declaration-name declaration)))
+        declaration)))
+
+(defun resolve-qualified-name (scope syntax name)
+  (let* ((current (semantic-scope-owning-module scope))
+         (program (semantic-scope-owning-program scope))
+         (qualifier (make-termis-name (module-name-string
+                                       (qualified-name-qualifier name))))
+         (import (and current (module-find-import current qualifier))))
+    (unless import
+      (let ((known (find (qualified-name-qualifier name) (program-modules program)
+                         :key #'module-name :test #'module-name=)))
+        (if known
+            (error 'module-not-imported :syntax syntax :message "ModuleNotImported"
+                   :current-module current :referenced-module known)
+            (error 'unknown-module-qualifier :syntax syntax :message "UnknownModuleQualifier"
+                   :qualifier (qualified-name-qualifier name)))))
+    (let* ((imported (import-module import))
+           (member (qualified-name-name name))
+           (declaration (module-find-export imported member)))
+      (unless declaration
+        (multiple-value-bind (private presentp) (find-declaration imported member)
+          (if presentp
+              (error 'private-declaration-access :syntax syntax
+                     :message "PrivateDeclarationAccess" :module imported :name member)
+              (error 'unknown-module-member :syntax syntax
+                     :message "UnknownModuleMember" :module imported :name member))))
+      (make-instance 'semantic-reference :syntax syntax :name name
+                     :binding (imported-binding program imported declaration)))))
+
 (defun resolve-name (scope syntax)
-  "Resolve a name SYNTAX into a semantic reference in SCOPE."
+  "Resolve local and qualified names through deliberately separate paths."
   (let ((name (syntax-datum syntax)))
-    (unless (termis-name-p name)
-      (error 'semantic-error :syntax syntax :message "expected a Termis name"))
-    (multiple-value-bind (binding foundp) (semantic-scope-find scope name)
-      (unless foundp
-	(error 'unresolved-name-error :name name :syntax syntax))
-      (make-instance 'semantic-reference :syntax syntax :name name :binding binding))))
+    (cond ((qualified-name-p name) (resolve-qualified-name scope syntax name))
+          ((termis-name-p name)
+           (multiple-value-bind (binding foundp) (semantic-scope-find scope name)
+             (unless foundp
+               (error 'unresolved-name-error :name name :syntax syntax))
+             (make-instance 'semantic-reference :syntax syntax :name name :binding binding)))
+          (t (error 'semantic-error :syntax syntax :message "expected a Termis name")))))
 
 (defun build-semantic-expression (scope syntax)
   "Build a resolved expression from syntax in SCOPE.
@@ -637,7 +703,7 @@ without changing the scope or binding model established here."
   (check-type scope semantic-scope)
   (check-type syntax syntax)
   (let ((datum (syntax-datum syntax)))
-    (cond ((termis-name-p datum) (resolve-name scope syntax))
+    (cond ((or (termis-name-p datum) (qualified-name-p datum)) (resolve-name scope syntax))
 	  ((termis-list-p datum)
 	   (let ((elements (termis-list-elements datum)))
 	     (unless elements
@@ -660,7 +726,7 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
   (check-type scope semantic-scope)
   (check-type syntax syntax)
   (let ((datum (syntax-datum syntax)))
-    (cond ((termis-name-p datum) (resolve-name scope syntax))
+    (cond ((or (termis-name-p datum) (qualified-name-p datum)) (resolve-name scope syntax))
 	  ((unit-literal-p datum)
 	   (make-instance 'semantic-unit-type-syntax :syntax syntax))
 	  ((termis-list-p datum)
@@ -763,7 +829,7 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 
 (defun resolve-function-signature (program semantic-declaration)
   (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
-	 (module-scope (semantic-program-module-scope program))
+	 (module-scope (semantic-program-module-scope-for program (declaration-module declaration)))
 	 (parameters-syntax (function-declaration-parameters declaration)))
     (unless (termis-list-p (syntax-datum parameters-syntax))
       (error 'semantic-error :syntax parameters-syntax
@@ -796,14 +862,21 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 
 (defun resolve-generic-implementation-signature (program semantic-implementation)
   (let* ((declaration (semantic-declaration-source-declaration semantic-implementation))
-         (module-scope (semantic-program-module-scope program))
-         (target (semantic-scope-lookup module-scope
-                                        (implementation-declaration-generic-name declaration))))
+         (module-scope (semantic-program-module-scope-for program (declaration-module declaration)))
+         (target-reference (resolve-name module-scope
+                                         (syntax-with-datum
+                                          (declaration-source declaration)
+                                          (implementation-declaration-generic-name declaration))))
+         (target (semantic-reference-binding target-reference)))
     (unless (typep target 'generic-binding)
       (error 'semantic-error :syntax (declaration-source declaration)
              :message "implementation target is not a generic"))
     (let* ((generic (generic-binding-generic target))
            (parameters-syntax (implementation-declaration-parameters declaration)))
+      (unless (eq (declaration-module declaration)
+                  (declaration-module (generic-declaration generic)))
+        (error 'semantic-error :syntax (declaration-source declaration)
+               :message "generic implementations must belong to the defining module"))
       (unless (termis-list-p (syntax-datum parameters-syntax))
         (error 'semantic-error :syntax parameters-syntax
                :message "implementation parameters must be a list"))
@@ -857,8 +930,8 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 	(t (error "Unknown Termis declaration ~S" declaration))))
 
 (defun resolve-declaration-signature (program semantic-declaration)
-  (let ((declaration (semantic-declaration-source-declaration semantic-declaration))
-	(scope (semantic-program-module-scope program)))
+  (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
+	(scope (semantic-program-module-scope-for program (declaration-module declaration))))
     (cond ((typep semantic-declaration 'semantic-function-declaration)
 	   (resolve-function-signature program semantic-declaration))
 	  ((typep semantic-declaration 'semantic-generic-implementation)
@@ -929,7 +1002,7 @@ semantic representation."
 
 (defun resolve-product-type-declaration (program semantic-declaration)
   (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
-         (scope (semantic-program-module-scope program))
+         (scope (semantic-program-module-scope-for program (declaration-module declaration)))
          (context (semantic-program-type-context program))
          (fields '()))
     (dolist (field-syntax (product-field-syntaxes declaration))
@@ -982,7 +1055,7 @@ semantic representation."
 
 (defun resolve-sum-type-declaration (program semantic-declaration)
   (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
-         (scope (semantic-program-module-scope program))
+         (scope (semantic-program-module-scope-for program (declaration-module declaration)))
          (context (semantic-program-type-context program))
          ;; Install identity before alternatives, but only after all previous
          ;; declarations are complete.  A reference to this declaration is
@@ -1222,10 +1295,10 @@ they represent parameter storage rather than C's accidental value category."
 
 (defun product-constructor-type (scope syntax)
   "Return the resolved ProductType selected by constructor head SYNTAX, if any."
-  (when (termis-name-p (syntax-datum syntax))
-    (multiple-value-bind (binding foundp)
-        (semantic-scope-find scope (syntax-datum syntax))
-      (when (and foundp (typep binding 'type-declaration))
+  (when (or (termis-name-p (syntax-datum syntax))
+            (qualified-name-p (syntax-datum syntax)))
+    (let ((binding (semantic-reference-binding (resolve-name scope syntax))))
+      (when (typep binding 'type-declaration)
         (let* ((program (semantic-scope-owning-program scope))
                (semantic (semantic-program-declaration program binding)))
           (and (typep semantic 'semantic-type-declaration)
@@ -1264,48 +1337,47 @@ they represent parameter storage rather than C's accidental value category."
 
 (defun infer-call-expression (syntax scope)
   (let* ((elements (termis-list-elements (syntax-datum syntax)))
-	 (product-type (product-constructor-type scope (first elements))))
+	 (head (first elements))
+	 (product-type (product-constructor-type scope head)))
     (when (typep product-type 'product-type)
       (return-from infer-call-expression
         (infer-construct-expression syntax scope product-type (rest elements))))
     ;; Generics are resolved here, after arguments have concrete semantic
     ;; types, and are immediately replaced by a primitive or ordinary call.
-    (when (termis-name-p (syntax-datum (first elements)))
-      (multiple-value-bind (head-binding foundp)
-          (semantic-scope-find scope (syntax-datum (first elements)))
-        (when (and foundp (typep head-binding 'generic-binding))
+    (when (or (termis-name-p (syntax-datum head))
+              (qualified-name-p (syntax-datum head)))
+      (let ((head-binding (semantic-reference-binding (resolve-name scope head))))
+        (when (typep head-binding 'generic-binding)
           (return-from infer-call-expression
-            (let* ((generic (generic-binding-generic head-binding))
-                 (argument-syntax (rest elements)))
-            (unless (= (length argument-syntax) (generic-arity generic))
-              (error 'wrong-argument-count-error :syntax syntax
-                     :expected (generic-arity generic) :actual (length argument-syntax)))
-            (let* ((arguments (mapcar (lambda (argument)
-                                        (infer-value-expression argument scope))
-                                      argument-syntax))
-                   (argument-types (mapcar #'expression-type arguments))
-                   (implementation (generic-find-implementation generic argument-types)))
-              (unless implementation
-                (error 'no-generic-implementation-error :syntax syntax
-                       :generic generic :argument-types argument-types))
-              (let ((operation (generic-implementation-primitive-operation implementation)))
-                (if operation
-                    (make-instance 'primitive-call :syntax syntax
-                                   :callee (make-instance 'semantic-reference
-                                                          :syntax (first elements)
-                                                          :name (generic-name generic)
-                                                          :binding head-binding)
-                                   :arguments arguments :operation operation
-                                   :type (generic-implementation-result-type implementation))
-                    (let ((callee (make-instance 'semantic-reference
-                                                 :syntax (first elements)
-                                                 :name (generic-name generic)
-                                                 :binding implementation
-                                                 :type (semantic-generic-implementation-type implementation))))
-                      (make-instance 'semantic-call :syntax syntax :callee callee
-                                     :arguments arguments
-                                     :type (generic-implementation-result-type implementation)))))))))))
-    (let* ((callee (infer-expression (first elements) scope))
+	    (let* ((generic (generic-binding-generic head-binding))
+                   (argument-syntax (rest elements)))
+              (unless (= (length argument-syntax) (generic-arity generic))
+                (error 'wrong-argument-count-error :syntax syntax
+                       :expected (generic-arity generic) :actual (length argument-syntax)))
+              (let* ((arguments (mapcar (lambda (argument)
+                                          (infer-value-expression argument scope))
+                                        argument-syntax))
+                     (argument-types (mapcar #'expression-type arguments))
+                     (implementation (generic-find-implementation generic argument-types)))
+                (unless implementation
+                  (error 'no-generic-implementation-error :syntax syntax
+                         :generic generic :argument-types argument-types))
+                (let ((operation (generic-implementation-primitive-operation implementation)))
+                  (if operation
+                      (make-instance 'primitive-call :syntax syntax
+                                     :callee (make-instance 'semantic-reference :syntax head
+                                                            :name (syntax-datum head)
+                                                            :binding head-binding)
+                                     :arguments arguments :operation operation
+                                     :type (generic-implementation-result-type implementation))
+                      (let ((callee (make-instance 'semantic-reference :syntax head
+                                                   :name (syntax-datum head)
+                                                   :binding implementation
+                                                   :type (semantic-generic-implementation-type implementation))))
+                        (make-instance 'semantic-call :syntax syntax :callee callee
+                                       :arguments arguments
+                                       :type (generic-implementation-result-type implementation))))))))))
+    (let* ((callee (infer-expression head scope))
 	 (callee-type (expression-type callee)))
     (unless (typep callee-type 'function-type)
       (error 'semantic-not-callable-error :syntax (first elements)
@@ -1332,7 +1404,7 @@ they represent parameter storage rather than C's accidental value category."
 			     :syntax syntax :callee callee :arguments arguments
 			     :operation operation :type (function-type-result callee-type)))
 	    (make-instance 'semantic-call :syntax syntax :callee callee
-			   :arguments arguments :type (function-type-result callee-type))))))))
+			   :arguments arguments :type (function-type-result callee-type)))))))))
 
 (defun infer-field-expression (syntax scope)
   (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
@@ -1713,7 +1785,8 @@ therefore visible, while the binding being built cannot see itself."
 	  ((stringp datum)
 	   (make-instance 'string-literal :syntax syntax :value datum
 					  :type (type-context-string-type context)))
-	  ((termis-name-p datum) (infer-reference-expression syntax scope))
+	  ((or (termis-name-p datum) (qualified-name-p datum))
+           (infer-reference-expression syntax scope))
 	  ((termis-list-p datum)
 	   (let ((elements (termis-list-elements datum)))
 	     (unless elements
@@ -2126,41 +2199,56 @@ the primitive model."
 	   (setf (semantic-constant-declaration-initializer semantic-declaration)
 		 (check-expression
 		  (constant-declaration-value declaration)
-		  (semantic-program-module-scope program)
+		  (semantic-program-module-scope-for program (declaration-module declaration))
 		  (semantic-constant-declaration-type semantic-declaration))))
 	  ((typep semantic-declaration 'semantic-variable-declaration)
 	   (setf (semantic-variable-declaration-initializer semantic-declaration)
 		 (check-expression
 		  (variable-declaration-initializer declaration)
-		  (semantic-program-module-scope program)
+		  (semantic-program-module-scope-for program (declaration-module declaration))
 		  (semantic-variable-declaration-type semantic-declaration)))))))
 
-(defun resolve-compilation-unit (unit)
-  "Resolve UNIT after all declarations have been collected.
+(defun resolve-program (entry-module modules)
+  "Resolve a graph of already-loaded modules into one semantic Program.
 
-The two passes are intentional: the first registers every runtime/type
-declaration and resolves interfaces; the second resolves executable bodies.
-Thus ordinary declaration order has no effect on name visibility."
-  (check-type unit compilation-unit)
+Every module has an isolated semantic scope; only QualifiedName resolution
+crosses the import/export boundary.  The shared type context makes the result
+ready for lowering as one LLVM module."
+  (check-type entry-module module)
   (let* ((type-context (make-type-context))
 	 (bootstrap (make-bootstrap-semantic-scope type-context))
-	 (module-scope (semantic-scope-child bootstrap))
-	 (program (make-instance 'semantic-program :bootstrap-scope bootstrap
-						   :module-scope module-scope
-						   :type-context type-context)))
+         (entry-scope (semantic-scope-child bootstrap))
+	 (program (make-instance 'program :bootstrap-scope bootstrap
+						   :module-scope entry-scope
+						   :type-context type-context
+                           :entry-module entry-module :modules modules
+                           :module-graph
+                           (make-instance 'module-graph :modules modules
+                                          :edges (mapcar (lambda (module)
+                                                           (cons module (mapcar #'import-module
+                                                                                (module-imports module))))
+                                                         modules)))))
     (setf (semantic-scope-program bootstrap) program)
+    (dolist (module modules)
+      (let ((scope (if (eq module entry-module) entry-scope
+                       (semantic-scope-child bootstrap))))
+        (setf (semantic-scope-module scope) module)
+        (push (cons module scope) (semantic-program-module-scopes program))))
     ;; Establish every semantic identity before publishing runtime names.
     ;; Implementations deliberately do not occupy the module namespace.
-    (dolist (declaration (unit-declarations unit))
-      (unless (typep declaration 'macro-declaration)
-        (let ((semantic-declaration (make-semantic-declaration declaration)))
-          (push (cons declaration semantic-declaration)
-                (semantic-program-declarations program)))))
+    (dolist (module modules)
+      (dolist (declaration (unit-declarations module))
+        (unless (typep declaration 'macro-declaration)
+          (let ((semantic-declaration (make-semantic-declaration declaration)))
+            (push (cons declaration semantic-declaration)
+                  (semantic-program-declarations program))))))
     (setf (semantic-program-declarations program)
 	  (nreverse (semantic-program-declarations program)))
     (dolist (entry (semantic-program-declarations program))
       (let* ((declaration (car entry))
-             (semantic-declaration (cdr entry)))
+             (semantic-declaration (cdr entry))
+             (module-scope (semantic-program-module-scope-for
+                            program (declaration-module declaration))))
         (cond ((typep semantic-declaration 'semantic-generic-declaration)
                (let ((generic (semantic-generic-declaration-generic semantic-declaration)))
                  (semantic-scope-bind module-scope (declaration-name declaration)
@@ -2175,5 +2263,13 @@ Thus ordinary declaration order has no effect on name visibility."
     (dolist (entry (semantic-program-declarations program))
       (resolve-declaration-body program (cdr entry)))
     (validate-for-backend program)
-    (setf (compilation-unit-semantic-program unit) program)
+    (dolist (module modules)
+      (setf (compilation-unit-semantic-program module) program))
     program))
+
+(defun resolve-compilation-unit (unit)
+  "Compatibility entry point for the original single-file compiler API."
+  (check-type unit compilation-unit)
+  (if (typep unit 'module)
+      (resolve-program unit (list unit))
+      (error "compilation units must now be modules")))

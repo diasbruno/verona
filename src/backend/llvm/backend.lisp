@@ -61,6 +61,16 @@ Common Lisp implementation or the compiler host."
   "Mangle a semantic name so no source spelling shares generated LLVM symbols."
   (with-output-to-string (stream)
     (write-string "__termis_" stream)
+    (let* ((source (cond ((typep binding 'termis:declaration) binding)
+                         ((typep binding 'termis:semantic-declaration)
+                          (semantic-source-binding binding))))
+           (module (and source (termis:declaration-module source))))
+      ;; String compilation retains its historic spelling for compatibility;
+      ;; every filename-derived module contributes its semantic identity.
+      (when (and module (termis:module-identity-explicit-p module))
+        (loop for character across (termis:module-name-string (termis:module-name module))
+              do (format stream "~6,'0X" (char-code character)))
+        (write-string "_" stream)))
     (loop for character across (termis:termis-name-value (termis:semantic-binding-name binding))
           do (format stream "~6,'0X" (char-code character)))))
 

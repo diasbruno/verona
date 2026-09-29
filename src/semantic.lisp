@@ -23,6 +23,8 @@
    ;; RETURN consults this semantic context; case scopes retain it naturally.
    (function :initarg :function :initform nil
              :accessor semantic-scope-function)
+   ;; Module ownership is semantic context, distinct from lexical parents.
+   (module :initarg :module :initform nil :accessor semantic-scope-module)
    (bindings :initform '() :accessor semantic-scope-bindings)))
 
 (defun make-semantic-scope (&optional parent)
