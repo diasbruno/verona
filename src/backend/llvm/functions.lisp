@@ -55,7 +55,9 @@
                              (format nil "~A.addr" (llvm-name parameter)))))
                (llvm:build-store (llvm-backend-builder backend) llvm-parameter address)
                (setf (backend-binding backend parameter) address)))
-    (llvm:build-ret (llvm-backend-builder backend)
-                    (emit-value backend
-                                (termis:semantic-function-declaration-body declaration)))
+    (let ((body (termis:semantic-function-declaration-body declaration)))
+      ;; A NeverType body has already emitted its terminator (currently an
+      ;; explicit return).  Emitting another instruction would corrupt LLVM.
+      (unless (typep (termis:expression-type body) 'termis:never-type)
+	(llvm:build-ret (llvm-backend-builder backend) (emit-value backend body))))
     function))

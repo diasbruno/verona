@@ -73,6 +73,29 @@
              (format nil "(function widen ((value i32)) i64 (%sext-primitive-i32-i64 value))~%
                           (function main () i64 (widen 42))")))))
 
+(test lowers-and-executes-boolean-matches
+  (let* ((source (format nil
+			 "(function max ((a i64) (b i64)) i64~%
+                            (match (%>-primitive-i64 a b)~%
+                              (true a)~%
+                              (false b)))~%
+                          (function main () i64 (max 20 42))"))
+	 (unit (compile-string (make-compiler) source))
+	 (backend (termis.backend.llvm:generate-llvm
+		   (compilation-unit-semantic-program unit)))
+	 (ir (termis.backend.llvm:print-llvm-module backend)))
+    (is (search "br i1" ir))
+    (is (search "phi i64" ir))
+    (is (= 42 (compile-and-run-native source)))))
+
+(test executes-terminating-and-integer-match-cases
+  (is (= 0 (compile-and-run-native
+	    "(function normalize ((x i64)) i64 (match (%<-primitive-i64 x 0) (true (return 0)) (false x))) (function main () i64 (normalize -10))")))
+  (is (= 42 (compile-and-run-native
+	    "(function normalize ((x i64)) i64 (match (%<-primitive-i64 x 0) (true (return 0)) (false x))) (function main () i64 (normalize 42))")))
+  (is (= 20 (compile-and-run-native
+	    "(function classify ((x i64)) i64 (match x (0 10) (1 20) (_ 30))) (function main () i64 (classify 1))"))))
+
 (test validates-the-executable-entry-contract
   (let ((unit (compile-string (make-compiler) "(function main () i32 0)")))
     (signals termis.backend.llvm:entry-point-error

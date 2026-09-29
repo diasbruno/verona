@@ -19,6 +19,10 @@
    (program :initarg :program :initform nil :accessor semantic-scope-program)
    (type-context :initarg :type-context :initform nil
                  :accessor semantic-scope-type-context)
+   ;; Function ownership is inherited in the same way as the type context.
+   ;; RETURN consults this semantic context; case scopes retain it naturally.
+   (function :initarg :function :initform nil
+             :accessor semantic-scope-function)
    (bindings :initform '() :accessor semantic-scope-bindings)))
 
 (defun make-semantic-scope (&optional parent)
@@ -44,6 +48,13 @@
         while current
         for context = (semantic-scope-type-context current)
         when context return context))
+
+(defun semantic-scope-owning-function (scope)
+  "Return the enclosing semantic function for SCOPE, when there is one."
+  (loop for current = scope then (semantic-scope-parent current)
+        while current
+        for function = (semantic-scope-function current)
+        when function return function))
 
 (defun semantic-scope-local-find (scope name)
   "Return the binding local to SCOPE for NAME, plus a presence flag."
@@ -132,4 +143,18 @@ parameter bindings before calling this operation."
                               (duplicate-local-binding-error-name condition))))
                    (format stream "duplicate local binding `~A`"
                            (termis-name-value
-                            (duplicate-local-binding-error-name condition))))))))
+                           (duplicate-local-binding-error-name condition))))))))
+
+(define-condition non-exhaustive-match-error (semantic-error)
+  ((uncovered :initarg :uncovered :reader non-exhaustive-match-error-uncovered))
+  (:report (lambda (condition stream)
+             (format stream "non-exhaustive match; uncovered: ~A"
+                     (non-exhaustive-match-error-uncovered condition)))))
+
+(define-condition unreachable-pattern-error (semantic-error)
+  ((covering-pattern :initarg :covering-pattern
+                     :reader unreachable-pattern-error-covering-pattern)))
+
+(define-condition unreachable-expression-error (semantic-error) ())
+
+(define-condition return-outside-function-error (semantic-error) ())

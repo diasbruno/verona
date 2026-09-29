@@ -108,6 +108,8 @@
    #:semantic-scope-child
    #:semantic-scope-owning-program
    #:semantic-scope-owning-type-context
+   #:semantic-scope-function
+   #:semantic-scope-owning-function
    #:semantic-program
    #:semantic-program-bootstrap-scope
    #:semantic-program-module-scope
@@ -120,6 +122,9 @@
    #:parameter-binding-type-syntax
    #:parameter-binding-type-reference
    #:parameter-binding-type
+   #:pattern-binding
+   #:pattern-binding-syntax
+   #:pattern-binding-type
    #:semantic-declaration
    #:semantic-declaration-source-declaration
    #:semantic-type-declaration
@@ -182,6 +187,26 @@
    #:assignment-expression-target
    #:assignment-expression-value
    #:store-expression
+   #:return-expression
+   #:return-expression-value
+   #:pattern
+   #:pattern-syntax
+   #:pattern-type
+   #:literal-pattern
+   #:literal-pattern-value
+   #:boolean-pattern
+   #:integer-pattern
+   #:wildcard-pattern
+   #:binding-pattern
+   #:binding-pattern-binding
+   #:match-case
+   #:match-case-syntax
+   #:match-case-pattern
+   #:match-case-scope
+   #:match-case-expression
+   #:match-expression
+   #:match-expression-value
+   #:match-expression-cases
    #:place-expression
    #:place-expression-addressable-p
    #:place-expression-writable-p
@@ -191,6 +216,7 @@
    #:semantic-pointer-type-syntax-target
    #:termis-type
    #:unit-type
+   #:never-type
    #:boolean-type
    #:string-type
    #:integer-type
@@ -209,6 +235,7 @@
    #:type-context
    #:make-type-context
    #:type-context-unit-type
+   #:type-context-never-type
    #:type-context-unit-value
    #:type-context-pointer-width
    #:type-context-unit-representation-type
@@ -252,6 +279,12 @@
    #:not-addressable-error
    #:not-writable-error
    #:invalid-expression-error
+   #:non-exhaustive-match-error
+   #:non-exhaustive-match-error-uncovered
+   #:unreachable-pattern-error
+   #:unreachable-pattern-error-covering-pattern
+   #:unreachable-expression-error
+   #:return-outside-function-error
    #:backend-validation-error
    #:validate-for-backend
    #:backend-representable-type-p

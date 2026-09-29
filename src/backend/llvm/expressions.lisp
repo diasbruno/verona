@@ -17,6 +17,9 @@
   (let ((binding (termis:semantic-reference-binding expression)))
     (cond ((typep binding 'termis:function-declaration)
            (backend-binding backend binding))
+	  ((typep binding 'termis:pattern-binding)
+	   ;; Binding patterns introduce an SSA value, not a mutable place.
+	   (backend-binding backend binding))
           ((typep binding 'termis:constant-declaration)
            (llvm:build-load (llvm-backend-builder backend)
                             (backend-binding backend binding) "constant"
@@ -24,6 +27,81 @@
           ;; A reference remaining in a value position is a frontend
           ;; invariant violation: Step 10 inserts LOAD explicitly.
           (t (backend-fail "unlowered value reference to ~S" binding)))))
+
+(defun match-pattern-constant (backend pattern)
+  (llvm:const-int (lower-type backend (termis:pattern-type pattern))
+		  (let ((value (termis:literal-pattern-value pattern)))
+		    (if (typep pattern 'termis:boolean-pattern)
+			(if value 1 0)
+			value))))
+
+(defun emit-match-value (backend expression)
+  "Lower a resolved match without re-evaluating its scrutinee.
+
+The semantic checker guarantees exhaustiveness and compatible patterns.  The
+only job here is to form the CFG and merge non-terminating case values."
+  (let* ((builder (llvm-backend-builder backend))
+	 (function (llvm:basic-block-parent (llvm:insertion-block builder)))
+	 (scrutinee (emit-value backend (termis:match-expression-value expression)))
+	 (cases (termis:match-expression-cases expression))
+	 (case-blocks (mapcar (lambda (case)
+				 (declare (ignore case))
+				 (llvm:append-basic-block function "match.case"
+							  :context (llvm-backend-context backend)))
+			       cases))
+	 (terminatingp (typep (termis:expression-type expression) 'termis:never-type))
+	 (end-block (unless terminatingp
+		      (llvm:append-basic-block function "match.end"
+					       :context (llvm-backend-context backend))))
+	 (default-block (llvm:append-basic-block function "match.unreachable"
+					  :context (llvm-backend-context backend))))
+    ;; Dispatch.  A wildcard/binding reaches its case directly; literal
+    ;; patterns form a comparison chain.  The default is semantically dead.
+    (loop for case in cases
+	  for block in case-blocks
+	  for remaining on cases
+	  for pattern = (termis:match-case-pattern case)
+	  do (if (or (typep pattern 'termis:wildcard-pattern)
+		     (typep pattern 'termis:binding-pattern))
+		 (llvm:build-br builder block)
+		 (let ((next (if (cdr remaining)
+				 (llvm:append-basic-block function "match.test"
+							  :context (llvm-backend-context backend))
+				 default-block)))
+		   (llvm:build-cond-br
+		    builder
+		    (llvm:build-i-cmp builder := scrutinee
+				      (match-pattern-constant backend pattern) "match.test")
+		    block next)
+		   (when (cdr remaining)
+		     (llvm:position-builder-at-end builder next)))))
+    (llvm:position-builder-at-end builder default-block)
+    (llvm:build-unreachable builder)
+    (let ((incoming '()))
+      (loop for case in cases
+	    for block in case-blocks
+	    do (llvm:position-builder-at-end builder block)
+	       (let ((pattern (termis:match-case-pattern case)))
+		 (when (typep pattern 'termis:binding-pattern)
+		   (setf (backend-binding backend (termis:binding-pattern-binding pattern)) scrutinee)))
+	       (let ((branch (termis:match-case-expression case)))
+		 (let ((value (emit-value backend branch))
+		       (source (llvm:insertion-block builder)))
+		   (unless (typep (termis:expression-type branch) 'termis:never-type)
+		     (llvm:build-br builder end-block)
+		     (push (cons value source) incoming)))))
+      (unless terminatingp
+	(llvm:position-builder-at-end builder end-block)
+	(cond ((typep (termis:expression-type expression) 'termis:unit-type)
+	       (llvm:const-int (lower-type backend (termis:expression-type expression)) 0))
+	      ((null (cdr incoming)) (caar incoming))
+	      (t (let ((phi (llvm:build-phi builder
+					 (lower-type backend (termis:expression-type expression))
+					 "match.result")))
+		   (llvm:add-incoming phi
+			      (coerce (mapcar #'car incoming) 'vector)
+			      (coerce (mapcar #'cdr incoming) 'vector))
+		   phi)))))))
 
 (defun emit-value (backend expression)
   "Emit EXPRESSION's already-resolved LLVM value."
@@ -62,6 +140,13 @@
                  for value = (emit-value backend child)
                  finally (return value))
            (llvm:const-int (lower-type backend (termis:expression-type expression)) 0))))
+
+    ((typep expression 'termis:return-expression)
+     (llvm:build-ret (llvm-backend-builder backend)
+		     (emit-value backend (termis:return-expression-value expression)))
+     nil)
+    ((typep expression 'termis:match-expression)
+     (emit-match-value backend expression))
     ((typep expression 'termis:primitive-call)
      (emit-primitive backend expression))
     ((typep expression 'termis:semantic-call)

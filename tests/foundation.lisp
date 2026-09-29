@@ -43,6 +43,11 @@
 		#:primitive-operation-result-type #:primitive-operation-nan-semantics
 		#:integer-literal #:boolean-literal #:string-literal
 		#:sequence-expression #:sequence-expression-expressions
+		#:match-expression #:match-expression-value #:match-expression-cases
+		#:match-case #:match-case-pattern #:match-case-scope #:match-case-expression
+		#:boolean-pattern #:integer-pattern #:wildcard-pattern #:binding-pattern
+		#:binding-pattern-binding #:pattern-binding #:pattern-binding-type
+		#:return-expression #:return-expression-value #:never-type
 		#:assignment-expression #:assignment-expression-target
 		#:address-expression #:dereference-expression
 		#:load-expression #:load-expression-place #:store-expression
@@ -58,6 +63,8 @@
 		#:type-context-unit-representation-type #:unit-machine-representation
 		#:defined-type #:defined-type-declaration #:expected-type-error
 		#:type-mismatch-error #:not-writable-error #:not-addressable-error
+		#:non-exhaustive-match-error #:unreachable-pattern-error
+		#:unreachable-expression-error
 		#:make-semantic-scope #:semantic-scope-child #:semantic-scope-bind
 		#:semantic-scope-lookup
 		#:unresolved-name-error #:duplicate-local-binding-error
@@ -628,6 +635,43 @@
     (is (not (eq (type-context-unit-type context64)
 		 (type-context-unit-representation-type context64))))
     (is (= 0 (unit-machine-representation context64 (type-context-unit-value context64))))))
+
+(test resolves-match-patterns-scopes-and-never
+  (let* ((unit (compile-string
+		(make-compiler)
+		"(function choose ((enabled bool) (x i64)) i64 (match enabled (true x) (false 0)))\
+                 (function identity ((value i64)) i64 (match value (bound bound)))\
+                 (function early ((enabled bool)) i64 (match enabled (true (return 10)) (false 20)))"))
+	 (program (compilation-unit-semantic-program unit))
+	 (choose (semantic-program-declaration program (first (unit-declarations unit))))
+	 (identity (semantic-program-declaration program (second (unit-declarations unit))))
+	 (early (semantic-program-declaration program (third (unit-declarations unit))))
+	 (choose-body (semantic-function-declaration-body choose))
+	 (identity-body (semantic-function-declaration-body identity))
+	 (early-body (semantic-function-declaration-body early)))
+    (is (typep choose-body 'match-expression))
+    (is (typep (match-case-pattern (first (match-expression-cases choose-body))) 'boolean-pattern))
+    (is (typep (match-case-pattern (second (match-expression-cases choose-body))) 'boolean-pattern))
+    (is (typep (match-case-pattern (first (match-expression-cases identity-body))) 'binding-pattern))
+    (is (typep (binding-pattern-binding
+		(match-case-pattern (first (match-expression-cases identity-body)))) 'pattern-binding))
+    (is (typep (match-case-expression (first (match-expression-cases early-body)))
+	       'return-expression))
+    (is (typep (semantic-expression-type
+		(match-case-expression (first (match-expression-cases early-body)))) 'never-type))
+    (is (eq program (validate-for-backend program)))))
+
+(test diagnoses-match-exhaustiveness-reachability-and-termination
+  (signals non-exhaustive-match-error
+    (compile-string (make-compiler) "(function bad ((x bool)) i64 (match x (true 1)))"))
+  (signals non-exhaustive-match-error
+    (compile-string (make-compiler) "(function bad ((x i64)) i64 (match x (0 1) (1 2)))"))
+  (signals unreachable-pattern-error
+    (compile-string (make-compiler) "(function bad ((x i64)) i64 (match x (_ 1) (0 2)))"))
+  (signals unreachable-pattern-error
+    (compile-string (make-compiler) "(function bad ((x bool)) i64 (match x (true 1) (true 2) (false 3)))"))
+  (signals unreachable-expression-error
+    (compile-string (make-compiler) "(function bad () i64 (do (return 1) 2))")))
 
 (defun run-tests ()
   (run! :termis))

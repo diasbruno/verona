@@ -15,6 +15,7 @@
 (defclass termis-type () ())
 
 (defclass unit-type (termis-type) ())
+(defclass never-type (termis-type) ())
 ;; UNIT-VALUE is deliberately an object rather than the host value NIL.  A
 ;; type context allocates exactly one of these objects, making the singleton
 ;; nature of Termis unit visible to later compiler stages without conflating it
@@ -37,6 +38,7 @@
 
 (defclass type-context ()
   ((unit-type :reader type-context-unit-type)
+   (never-type :reader type-context-never-type)
    (unit-value :reader type-context-unit-value)
    (pointer-width :initarg :pointer-width :reader type-context-pointer-width)
    (boolean-type :reader type-context-boolean-type)
@@ -55,6 +57,7 @@
            pointer-width))
   (let ((context (make-instance 'type-context)))
     (setf (slot-value context 'unit-type) (make-instance 'unit-type)
+	  (slot-value context 'never-type) (make-instance 'never-type)
 	  (slot-value context 'unit-value) (make-instance 'unit-value)
 	  (slot-value context 'pointer-width) pointer-width
 	  (slot-value context 'boolean-type) (make-instance 'boolean-type)
@@ -191,6 +194,10 @@ the semantic type of a unit expression remains UnitType."
    (type-reference :initform nil :accessor parameter-binding-type-reference)
    (type :initform nil :accessor parameter-binding-type)))
 
+(defclass pattern-binding (semantic-binding)
+  ((syntax :initarg :syntax :reader pattern-binding-syntax)
+   (type :initarg :type :reader pattern-binding-type)))
+
 (defclass semantic-program ()
   ((bootstrap-scope :initarg :bootstrap-scope
                     :reader semantic-program-bootstrap-scope)
@@ -282,6 +289,28 @@ the semantic type of a unit expression remains UnitType."
   ((target :initarg :target :reader assignment-expression-target)
    (value :initarg :value :reader assignment-expression-value)))
 (defclass store-expression (assignment-expression) ())
+(defclass return-expression (semantic-expression)
+  ((value :initarg :value :reader return-expression-value)))
+
+;;; The source representation is resolved before reaching the backend.
+(defclass pattern ()
+  ((syntax :initarg :syntax :reader pattern-syntax)
+   (type :initarg :type :reader pattern-type)))
+(defclass literal-pattern (pattern)
+  ((value :initarg :value :reader literal-pattern-value)))
+(defclass boolean-pattern (literal-pattern) ())
+(defclass integer-pattern (literal-pattern) ())
+(defclass wildcard-pattern (pattern) ())
+(defclass binding-pattern (pattern)
+  ((binding :initarg :binding :reader binding-pattern-binding)))
+(defclass match-case ()
+  ((syntax :initarg :syntax :reader match-case-syntax)
+   (pattern :initarg :pattern :reader match-case-pattern)
+   (scope :initarg :scope :reader match-case-scope)
+   (expression :initarg :expression :reader match-case-expression)))
+(defclass match-expression (semantic-expression)
+  ((value :initarg :value :reader match-expression-value)
+   (cases :initarg :cases :reader match-expression-cases)))
 
 (defun semantic-program-declaration (program declaration)
   "Return DECLARATION's resolved semantic node, or NIL for macro declarations."
@@ -552,6 +581,7 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 		   :name (semantic-binding-name parameter) :existing existing))
 	  (semantic-scope-bind scope (semantic-binding-name parameter) parameter)))
       (setf (semantic-function-declaration-scope semantic-declaration) scope
+	    (semantic-scope-function scope) semantic-declaration
 	    (semantic-function-declaration-parameters semantic-declaration) parameters
 	    (semantic-function-declaration-return-type-reference semantic-declaration)
 	    (resolve-type-syntax module-scope
@@ -672,7 +702,8 @@ type checker."
 
 (defun termis-type-name (type)
   "A compact stable spelling used in semantic diagnostics."
-  (cond ((typep type 'unit-type) "unit")
+  (cond ((typep type 'never-type) "never")
+	((typep type 'unit-type) "unit")
 	((typep type 'boolean-type) "bool")
 	((typep type 'string-type) "string")
 	((typep type 'integer-type)
@@ -704,6 +735,7 @@ type checker."
 (defun binding-expression-type (scope binding syntax)
   "Return BINDING's runtime type without changing its identity."
   (cond ((typep binding 'parameter-binding) (parameter-binding-type binding))
+	((typep binding 'pattern-binding) (pattern-binding-type binding))
 	((typep binding 'primitive-binding)
 	 (builtin-intrinsic-binding-type binding))
 	((or (typep binding 'builtin-type-binding)
@@ -774,13 +806,132 @@ they represent parameter storage rather than C's accidental value category."
 			   :arguments arguments :type (function-type-result callee-type)))))))
 
 (defun infer-sequence-expression (syntax scope)
-  (let ((expressions (mapcar (lambda (form) (infer-value-expression form scope))
-			     (rest (termis-list-elements (syntax-datum syntax))))))
+  (let ((expressions '()))
+    (dolist (form (rest (termis-list-elements (syntax-datum syntax))))
+      (when (and expressions (typep (expression-type (car (last expressions))) 'never-type))
+        (error 'unreachable-expression-error :syntax form
+               :message "expression follows terminating control flow"))
+      (push (infer-value-expression form scope) expressions))
+    (setf expressions (nreverse expressions))
     (make-instance 'sequence-expression :syntax syntax :expressions expressions
 					:type (if expressions
 						  (expression-type (car (last expressions)))
 						  (type-context-unit-type
 						   (semantic-scope-owning-type-context scope))))))
+
+(defun analyze-pattern (syntax scope scrutinee-type)
+  "Resolve one source pattern and install a binding in the case scope." 
+  (let ((datum (syntax-datum syntax)))
+    (cond ((termis-boolean-literal-p datum)
+	   (unless (typep scrutinee-type 'boolean-type)
+	     (error 'type-mismatch-error :syntax syntax
+		    :actual (type-context-boolean-type (semantic-scope-owning-type-context scope))
+		    :expected scrutinee-type))
+	   (make-instance 'boolean-pattern :syntax syntax :type scrutinee-type
+			  :value (termis-boolean-literal-value datum)))
+	  ((integerp datum)
+	   (unless (typep scrutinee-type 'integer-type)
+	     (error 'type-mismatch-error :syntax syntax
+		    :actual (type-context-integer-type (semantic-scope-owning-type-context scope) t 32)
+		    :expected scrutinee-type))
+	   (make-instance 'integer-pattern :syntax syntax :type scrutinee-type :value datum))
+	  ((termis-name-p datum)
+	   (if (string= (termis-name-value datum) "_")
+	       (make-instance 'wildcard-pattern :syntax syntax :type scrutinee-type)
+	       (let ((binding (make-instance 'pattern-binding :name datum :syntax syntax
+					    :type scrutinee-type)))
+		 (semantic-scope-bind scope datum binding)
+		 (make-instance 'binding-pattern :syntax syntax :type scrutinee-type
+				:binding binding))))
+	  (t (error 'invalid-expression-error :syntax syntax
+		    :message "match patterns must be a literal, binding, or _")))))
+
+(defun pattern-catches-all-p (pattern)
+  (or (typep pattern 'wildcard-pattern) (typep pattern 'binding-pattern)))
+
+(defun pattern-already-covered-p (pattern covered)
+  (or (and (pattern-catches-all-p covered) t)
+      (and (typep pattern 'boolean-pattern) (typep covered 'boolean-pattern)
+	   (eql (literal-pattern-value pattern) (literal-pattern-value covered)))
+      (and (typep pattern 'integer-pattern) (typep covered 'integer-pattern)
+	   (= (literal-pattern-value pattern) (literal-pattern-value covered)))))
+
+(defun validate-match-coverage (syntax scrutinee-type cases)
+  (let ((covered '()))
+    (dolist (case cases)
+      (let ((pattern (match-case-pattern case)))
+	(when (find-if (lambda (prior) (pattern-already-covered-p pattern prior)) covered)
+	  (error 'unreachable-pattern-error :syntax (pattern-syntax pattern)
+		 :message "pattern is unreachable"
+		 :covering-pattern (find-if (lambda (prior) (pattern-already-covered-p pattern prior)) covered)))
+	(push pattern covered)))
+    (unless (or (find-if #'pattern-catches-all-p covered)
+		(and (typep scrutinee-type 'boolean-type)
+		     (find-if (lambda (p) (and (typep p 'boolean-pattern)
+						  (literal-pattern-value p))) covered)
+		     (find-if (lambda (p) (and (typep p 'boolean-pattern)
+						  (not (literal-pattern-value p)))) covered)))
+      (error 'non-exhaustive-match-error :syntax syntax
+	     :message "match is not exhaustive"
+	     :uncovered (if (typep scrutinee-type 'boolean-type) "true or false" "a catch-all pattern")))))
+
+(defun parse-match-cases (syntax scope scrutinee-type)
+  (let ((case-syntaxes (cddr (termis-list-elements (syntax-datum syntax)))))
+    (unless case-syntaxes
+      (error 'invalid-expression-error :syntax syntax :message "match requires at least one case"))
+    (let ((cases
+	    (mapcar (lambda (case-syntax)
+		      (let ((elements (and (termis-list-p (syntax-datum case-syntax))
+				   (termis-list-elements (syntax-datum case-syntax)))))
+			(unless (= (length elements) 2)
+			  (error 'invalid-expression-error :syntax case-syntax
+				 :message "match case must be a (pattern expression) list"))
+			(let ((case-scope (semantic-scope-child scope)))
+			  (make-instance 'match-case :syntax case-syntax :scope case-scope
+				 :pattern (analyze-pattern (first elements) case-scope scrutinee-type)
+				 :expression (second elements)))))
+		    case-syntaxes)))
+      (validate-match-coverage syntax scrutinee-type cases)
+      cases)))
+
+(defun infer-match-expression (syntax scope &optional expected-type)
+  (let* ((elements (termis-list-elements (syntax-datum syntax)))
+	 (value (infer-value-expression (second elements) scope))
+	 (cases (parse-match-cases syntax scope (expression-type value))))
+    ;; Analyse all branch scopes before choosing contextual literal types.
+    (let ((result-type expected-type))
+      (unless result-type
+	(dolist (case cases)
+	  (let ((expression (infer-value-expression (match-case-expression case)
+							 (match-case-scope case))))
+	    (setf (slot-value case 'expression) expression)
+	    (unless (typep (expression-type expression) 'never-type)
+	      (setf result-type (expression-type expression))
+	      (return))))
+	(unless result-type
+	  (setf result-type (type-context-never-type (semantic-scope-owning-type-context scope)))))
+      (dolist (case cases)
+	(let ((expression (match-case-expression case)))
+	  (setf (slot-value case 'expression)
+		(if (typep expression 'expression)
+		    (if (or (typep (expression-type expression) 'never-type)
+			    (same-type-p (expression-type expression) result-type)) expression
+			(check-expression (match-case-expression case) (match-case-scope case) result-type))
+		    (check-expression expression (match-case-scope case) result-type)))))
+      (make-instance 'match-expression :syntax syntax :value value :cases cases
+			     :type result-type))))
+
+(defun infer-return-expression (syntax scope)
+  (let ((arguments (rest (termis-list-elements (syntax-datum syntax))))
+	(function (semantic-scope-owning-function scope)))
+    (unless function
+      (error 'return-outside-function-error :syntax syntax :message "return is only valid inside a function"))
+    (unless (= (length arguments) 1)
+      (error 'invalid-expression-error :syntax syntax :message "return requires exactly one value"))
+    (make-instance 'return-expression :syntax syntax
+		   :value (check-expression (first arguments) scope
+					    (semantic-function-declaration-return-type function))
+		   :type (type-context-never-type (semantic-scope-owning-type-context scope)))))
 
 (defun infer-address-expression (syntax scope)
   (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
@@ -879,6 +1030,14 @@ they represent parameter storage rather than C's accidental value category."
 	     (let ((special (expression-special-form-name syntax)))
 	       (cond ((and special (string= special "do"))
 		      (infer-sequence-expression syntax scope))
+		     ((and special (string= special "match"))
+		      (let ((elements (termis-list-elements datum)))
+			(unless (>= (length elements) 3)
+			  (error 'invalid-expression-error :syntax syntax
+				 :message "match requires a value and at least one case"))
+			(infer-match-expression syntax scope)))
+		     ((and special (string= special "return"))
+		      (infer-return-expression syntax scope))
 		     ((and special (string= special "assign"))
 		      (infer-assignment-expression syntax scope))
 		     ((and special (string= special "store"))
@@ -901,12 +1060,18 @@ they represent parameter storage rather than C's accidental value category."
   "Analyze SYNTAX with EXPECTED-TYPE, contextually typing numeric literals."
   (check-type expected-type termis-type)
   (let ((datum (syntax-datum syntax)))
-    (cond ((and (integerp datum) (typep expected-type 'integer-type))
+    (cond ((and (termis-list-p datum)
+		(expression-special-form-name syntax)
+		(string= (expression-special-form-name syntax) "match"))
+	   (let ((expression (infer-match-expression syntax scope expected-type)))
+	     expression))
+	  ((and (integerp datum) (typep expected-type 'integer-type))
 	   (make-instance 'integer-literal :syntax syntax :value datum :type expected-type))
 	  ((and (floatp datum) (typep expected-type 'float-type))
 	   (make-instance 'float-literal :syntax syntax :value datum :type expected-type))
 	  (t (let ((expression (infer-value-expression syntax scope)))
-	       (unless (compatible-p (expression-type expression) expected-type)
+	       (unless (or (typep (expression-type expression) 'never-type)
+		   (compatible-p (expression-type expression) expected-type))
 		 (error 'type-mismatch-error :syntax syntax
 				     :actual (expression-type expression) :expected expected-type))
 	       expression)))))
@@ -950,10 +1115,38 @@ the Step 10 primitive model."
 (defun validate-expression-for-backend (expression)
   (unless (and (typep expression 'expression) (typep (expression-type expression) 'termis-type))
     (backend-validation-fail expression "expression is missing a resolved semantic type"))
-  (unless (backend-representable-type-p (expression-type expression))
+  (unless (or (typep (expression-type expression) 'never-type)
+	      (backend-representable-type-p (expression-type expression)))
     (backend-validation-fail expression "expression type ~A is not backend representable"
 			     (termis-type-name (expression-type expression))))
   (cond
+    ((typep expression 'return-expression)
+     (validate-expression-for-backend (return-expression-value expression))
+     (unless (and (typep (expression-type expression) 'never-type)
+		  (typep (return-expression-value expression) 'expression))
+       (backend-validation-fail expression "return is not fully resolved")))
+    ((typep expression 'match-expression)
+     (validate-expression-for-backend (match-expression-value expression))
+	     (unless (or (typep (expression-type (match-expression-value expression)) 'boolean-type)
+			 (typep (expression-type (match-expression-value expression)) 'integer-type))
+	       (backend-validation-fail expression "match scrutinee has no LLVM comparison lowering"))
+     (dolist (case (match-expression-cases expression))
+       (let ((pattern (match-case-pattern case))
+	     (branch (match-case-expression case)))
+	   (unless (and (typep pattern 'pattern)
+			(typep (pattern-type pattern) 'termis-type)
+			(same-type-p (pattern-type pattern)
+				     (expression-type (match-expression-value expression))))
+	     (backend-validation-fail expression "match pattern is unresolved or incompatible"))
+	   (when (typep pattern 'binding-pattern)
+	     (unless (and (typep (binding-pattern-binding pattern) 'pattern-binding)
+			  (same-type-p (pattern-binding-type (binding-pattern-binding pattern))
+				       (pattern-type pattern)))
+	       (backend-validation-fail expression "match binding is unresolved")))
+	   (validate-expression-for-backend branch)
+	   (unless (or (typep (expression-type branch) 'never-type)
+		       (same-type-p (expression-type branch) (expression-type expression)))
+	     (backend-validation-fail expression "match branch has a different result type")))))
     ((typep expression 'unit-expression)
      (unless (typep (expression-type expression) 'unit-type)
        (backend-validation-fail expression "UnitValue does not have UnitType")))
@@ -1059,8 +1252,9 @@ the Step 10 primitive model."
 				   (semantic-function-declaration-return-type declaration)))
 		   (backend-validation-fail nil "function signature is incomplete"))
 		 (validate-expression-for-backend (semantic-function-declaration-body declaration))
-		 (unless (same-type-p (expression-type (semantic-function-declaration-body declaration))
-			      (semantic-function-declaration-return-type declaration))
+		 (unless (or (typep (expression-type (semantic-function-declaration-body declaration)) 'never-type)
+			     (same-type-p (expression-type (semantic-function-declaration-body declaration))
+				  (semantic-function-declaration-return-type declaration)))
 		   (backend-validation-fail (semantic-function-declaration-body declaration)
 					    "function result is not exactly typed"))))
 	      ((typep declaration 'semantic-constant-declaration)
