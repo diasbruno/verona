@@ -111,6 +111,7 @@
    #:semantic-program
    #:semantic-program-bootstrap-scope
    #:semantic-program-module-scope
+   #:semantic-program-declarations
    #:semantic-program-declaration
    #:semantic-program-type-context
    #:make-bootstrap-semantic-scope
@@ -151,6 +152,7 @@
    #:unit-expression-value
    #:unit-value
    #:boolean-literal
+   #:boolean-literal-value
    #:integer-literal
    #:integer-literal-value
    #:float-literal

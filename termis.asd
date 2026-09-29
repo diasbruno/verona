@@ -10,7 +10,27 @@
                (:file "src/compiler")
                (:file "src/resolver")))
 
+(asdf:defsystem #:termis/backend/llvm
+  :description "LLVM lowering for LLVM-ready Termis semantic programs"
+  :depends-on (#:termis #:llvm)
+  :serial t
+  :components ((:file "src/backend/llvm/package")
+               (:file "src/backend/llvm/target")
+               (:file "src/backend/llvm/backend")
+               (:file "src/backend/llvm/types")
+               (:file "src/backend/llvm/primitives")
+               (:file "src/backend/llvm/expressions")
+               (:file "src/backend/llvm/functions")
+               (:file "src/backend/llvm/module")
+               (:file "src/backend/llvm/codegen")))
+
 (asdf:defsystem #:termis/tests
   :depends-on (#:termis #:fiveam)
   :serial t
   :components ((:file "tests/foundation")))
+
+(asdf:defsystem #:termis/llvm-tests
+  :description "FiveAM integration tests for the Termis LLVM backend"
+  :depends-on (#:termis/tests #:termis/backend/llvm)
+  :serial t
+  :components ((:file "tests/llvm-backend")))
