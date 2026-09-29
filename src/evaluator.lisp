@@ -115,7 +115,7 @@ IMPLEMENTATION must return one SYNTAX object."
   "Recursively expand a macro in SYNTAX's outermost position.
 
 Expansion intentionally stops once the outer form is not a macro; definition
-forms such as %FUNCTION are therefore left as Termis syntax for a later step."
+forms such as %FUNCTION are therefore left as Termis syntax for later processing."
   (check-type syntax syntax)
   (check-type environment environment)
   (let ((macro (macro-at-head syntax environment)))

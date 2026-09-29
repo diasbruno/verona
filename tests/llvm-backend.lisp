@@ -98,6 +98,23 @@
                                                  (length ir))))))
     (is (= 52 (compile-and-run-native source)))))
 
+(test lowers-products-as-ssa-aggregates-and-executes-them
+  (let* ((source
+	  "(type point ((x i64) (y i64)))
+             (type line ((start point) (end point)))
+             (function make-point ((x i64) (y i64)) point (point x y))
+             (function end-y ((value line)) i64 (field (field value end) y))
+             (function main () i64
+               (let ((value line (line (make-point 10 20) (make-point 30 42))))
+                 (end-y value)))")
+	 (unit (compile-string (make-compiler) source))
+	 (backend (termis.backend.llvm:generate-llvm
+		   (compilation-unit-semantic-program unit)))
+	 (ir (termis.backend.llvm:print-llvm-module backend)))
+    (is (search "insertvalue" ir))
+    (is (search "extractvalue" ir))
+    (is (= 42 (compile-and-run-native source)))))
+
 (test lowers-and-executes-boolean-matches
   (let* ((source (format nil
 			 "(function max ((a i64) (b i64)) i64~%

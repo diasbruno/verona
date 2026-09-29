@@ -28,7 +28,7 @@
                             (backend-binding backend binding) "constant"
                             (lower-type backend (termis:expression-type expression))))
           ;; A reference remaining in a value position is a frontend
-          ;; invariant violation: Step 10 inserts LOAD explicitly.
+          ;; invariant violation: the resolver inserts LOAD explicitly.
           (t (backend-fail "unlowered value reference to ~S" binding)))))
 
 (defun match-pattern-constant (backend pattern)
@@ -120,6 +120,26 @@ only job here is to form the CFG and merge non-terminating case values."
     ((typep expression 'termis:float-literal)
      (llvm:const-real (lower-type backend (termis:expression-type expression))
                       (termis:float-literal-value expression)))
+    ((typep expression 'termis:construct-expression)
+     (let ((aggregate (llvm:undef (lower-type backend
+                                             (termis:construct-expression-product-type expression)))))
+       (loop for value-expression in (termis:construct-expression-fields expression)
+             for index from 0
+             do (setf aggregate
+                      (llvm:build-insert-value (llvm-backend-builder backend)
+                                               aggregate
+                                               (emit-value backend value-expression)
+                                               index "product.insert")))
+       aggregate))
+    ((typep expression 'termis:field-expression)
+     (let ((field (termis:field-expression-field expression)))
+       ;; The resolver records ProductField identity and index.  LLVM never
+       ;; sees or looks up a source-level field name.
+       (llvm:build-extract-value (llvm-backend-builder backend)
+                                 (emit-value backend
+                                             (termis:field-expression-value expression))
+                                 (termis:product-field-index field)
+                                 "product.field")))
     ((typep expression 'termis:reference-expression)
      (emit-reference-value backend expression))
     ((typep expression 'termis:load-expression)

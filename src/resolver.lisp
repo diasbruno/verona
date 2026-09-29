@@ -36,6 +36,17 @@
 (defclass defined-type (termis-type)
   ((declaration :initarg :declaration :reader defined-type-declaration)))
 
+;; A product retains its declaration identity through DEFINED-TYPE while also
+;; carrying the complete, ordered value layout needed by later stages.
+(defclass product-type (defined-type)
+  ((fields :initarg :fields :reader product-type-fields)))
+
+(defclass product-field ()
+  ((name :initarg :name :reader product-field-name)
+   (type :initarg :type :reader product-field-type)
+   (index :initarg :index :reader product-field-index)
+   (source :initarg :source :reader product-field-source)))
+
 (defclass type-context ()
   ((unit-type :reader type-context-unit-type)
    (never-type :reader type-context-never-type)
@@ -124,6 +135,13 @@ the semantic type of a unit expression remains UnitType."
 	(push (cons declaration type) (type-context-defined-types context))
 	type)))
 
+(defun type-context-product-type (context declaration fields)
+  "Install DECLARATION's complete nominal product type exactly once."
+  (or (cdr (assoc declaration (type-context-defined-types context) :test #'eq))
+      (let ((type (make-instance 'product-type :declaration declaration :fields fields)))
+	(push (cons declaration type) (type-context-defined-types context))
+	type)))
+
 ;;; Concrete primitive operations -----------------------------------------
 
 ;; A primitive operation is a Termis semantic entity.  Its KIND is the
@@ -181,7 +199,7 @@ the semantic type of a unit expression remains UnitType."
 
 ;;; These nodes retain the resolved structure of compound type syntax until
 ;;; the type pass turns them into TERMIS-TYPE objects.  A bare type name stays
-;;; a SEMANTIC-REFERENCE, preserving the Step 7 representation and API.
+;;; a SEMANTIC-REFERENCE, preserving the established representation and API.
 (defclass semantic-type-syntax ()
   ((syntax :initarg :syntax :reader semantic-type-syntax-syntax)))
 (defclass semantic-unit-type-syntax (semantic-type-syntax) ())
@@ -221,7 +239,8 @@ the semantic type of a unit expression remains UnitType."
                        :reader semantic-declaration-source-declaration)))
 
 (defclass semantic-type-declaration (semantic-declaration)
-  ((type :initform nil :accessor semantic-type-declaration-type)))
+  ((type :initform nil :accessor semantic-type-declaration-type)
+   (fields :initform '() :accessor semantic-type-declaration-fields)))
 
 (defclass semantic-constant-declaration (semantic-declaration)
   ((type-reference :initform nil
@@ -286,6 +305,12 @@ the semantic type of a unit expression remains UnitType."
 ;; Conversion calls are a distinct semantic class so a backend can lower
 ;; them mechanically without inspecting primitive names or argument types.
 (defclass conversion-expression (primitive-call) ())
+(defclass construct-expression (semantic-expression)
+  ((product-type :initarg :product-type :reader construct-expression-product-type)
+   (fields :initarg :fields :reader construct-expression-fields)))
+(defclass field-expression (semantic-expression)
+  ((value :initarg :value :reader field-expression-value)
+   (field :initarg :field :reader field-expression-field)))
 (defclass sequence-expression (semantic-expression)
   ((expressions :initarg :expressions :reader sequence-expression-expressions)))
 (defclass let-expression (semantic-expression)
@@ -448,7 +473,7 @@ than recovered later through ad-hoc string comparisons."
 		    ((> source-width destination-width)
 		     (bind (format nil "%ftrunc-primitive-~A-~A" (float-name source) (float-name destination))
 			   (list source) destination :float-truncate)))))))
-      ;; Transitional aliases preserve the Step 9 surface spelling while
+      ;; Transitional aliases preserve the established surface spelling while
       ;; resolving to concrete i32 operations, never generic dispatch.
       (let ((i32 (type-context-integer-type type-context t 32)))
 	(dolist (spec '(("+" :integer-add) ("-" :integer-subtract)
@@ -527,7 +552,28 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 	       (if (termis-name-p name)
 		   (format stream "~A is not a type"
 			   (termis-name-value name))
-		   (format stream "expected a type"))))))
+           (format stream "expected a type"))))))
+
+(define-condition duplicate-field-error (semantic-error)
+  ((name :initarg :name :reader duplicate-field-error-name)
+   (existing :initarg :existing :reader duplicate-field-error-existing)))
+
+(define-condition recursive-type-not-supported-error (semantic-error) ())
+
+(define-condition unknown-field-error (semantic-error)
+  ((product-type :initarg :product-type :reader unknown-field-error-product-type)
+   (name :initarg :name :reader unknown-field-error-name)))
+
+(define-condition field-access-requires-product-error (semantic-error)
+  ((actual :initarg :actual :reader field-access-requires-product-error-actual)))
+
+(defun product-type-find-field (product-type name)
+  "Return PRODUCT-TYPE's field named NAME, plus a presence flag."
+  (check-type product-type product-type)
+  (check-type name termis-name)
+  (let ((field (find name (product-type-fields product-type)
+                     :key #'product-field-name :test #'termis-name=)))
+    (values field (not (null field)))))
 
 (defun resolve-type (type-context resolved-type-syntax)
   "Turn resolved type syntax into a canonical, backend-independent type."
@@ -625,20 +671,81 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 	   (setf (semantic-variable-declaration-type-reference semantic-declaration)
 		 (resolve-type-syntax scope (variable-declaration-type declaration)))))))
 
-(defun create-defined-type-identities (program)
-  "Allocate every nominal type before resolving any use of one.
+(defun product-field-syntaxes (declaration)
+  "Normalize the product body while accepting the earlier flat form.
 
-Doing this as a separate stage makes forward and recursive references refer
-to a stable declaration identity rather than attempting to expand a type
-definition eagerly."
-  (let ((context (semantic-program-type-context program)))
-    (dolist (entry (semantic-program-declarations program))
-      (let ((semantic-declaration (cdr entry)))
-	(when (typep semantic-declaration 'semantic-type-declaration)
-	  (setf (semantic-type-declaration-type semantic-declaration)
-		(type-context-defined-type
-		 context
-		 (semantic-declaration-source-declaration semantic-declaration))))))))
+The documented spelling has one list containing every field.  Accepting the
+previous flat spelling keeps source compatibility without changing the
+semantic representation."
+  (let ((body (type-declaration-body declaration)))
+    (cond ((and (= (length body) 1) (termis-list-p (syntax-datum (first body)))
+		(let ((elements (termis-list-elements (syntax-datum (first body)))))
+		  (or (null elements)
+		      (termis-list-p (syntax-datum (first elements))))))
+	   (termis-list-elements (syntax-datum (first body))))
+	  ((every (lambda (syntax) (termis-list-p (syntax-datum syntax))) body) body)
+	  ;; Earlier front-end milestones allowed TYPE to be an opaque declaration
+	  ;; payload.  Preserve those expansion tests as a zero-field nominal
+	  ;; product; actual product syntax is always list-shaped.
+	  ((every (lambda (syntax) (not (termis-list-p (syntax-datum syntax)))) body) '())
+	  (t body))))
+
+(defun parse-product-field-syntax (field-syntax)
+  (unless (termis-list-p (syntax-datum field-syntax))
+    (error 'semantic-error :syntax field-syntax
+           :message "product field must be a (name type) list"))
+  (let ((elements (termis-list-elements (syntax-datum field-syntax))))
+    (unless (= (length elements) 2)
+      (error 'semantic-error :syntax field-syntax
+             :message "product field must contain a name and type"))
+    (let ((name (syntax-datum (first elements))))
+      (unless (termis-name-p name)
+        (error 'semantic-error :syntax (first elements)
+               :message "product field name must be a Termis name"))
+      (values name (second elements)))))
+
+(defun ensure-product-field-type-is-complete (program resolved-type-syntax syntax)
+  "Reject self and forward references before a product gets an LLVM layout."
+  (cond ((typep resolved-type-syntax 'semantic-reference)
+         (let ((binding (semantic-reference-binding resolved-type-syntax)))
+           (when (typep binding 'type-declaration)
+             (let ((semantic (semantic-program-declaration program binding)))
+               (unless (and (typep semantic 'semantic-type-declaration)
+                            (typep (semantic-type-declaration-type semantic) 'product-type))
+                 (error 'recursive-type-not-supported-error :syntax syntax
+                        :message "RecursiveTypeNotSupported: product fields may reference only earlier complete types"))))))
+        ((typep resolved-type-syntax 'semantic-pointer-type-syntax)
+         ;; Pointer recursion is deferred with all other recursive product
+         ;; machinery, even though LLVM could represent some instances.
+         (ensure-product-field-type-is-complete
+          program (semantic-pointer-type-syntax-target resolved-type-syntax) syntax))))
+
+(defun resolve-product-type-declaration (program semantic-declaration)
+  (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
+         (scope (semantic-program-module-scope program))
+         (context (semantic-program-type-context program))
+         (fields '()))
+    (dolist (field-syntax (product-field-syntaxes declaration))
+      (multiple-value-bind (name type-syntax) (parse-product-field-syntax field-syntax)
+        (let ((existing (find name fields :key #'product-field-name :test #'termis-name=)))
+          (when existing
+            (error 'duplicate-field-error :syntax (first (termis-list-elements
+                                                           (syntax-datum field-syntax)))
+                   :message "DuplicateField" :name name :existing existing)))
+        (let ((reference (resolve-type-syntax scope type-syntax)))
+          (ensure-product-field-type-is-complete program reference type-syntax)
+          (push (make-instance 'product-field :name name
+                               :type (resolve-type context reference)
+                               :index (length fields) :source field-syntax)
+                fields))))
+    (setf fields (nreverse fields))
+    ;; Indexes were assigned while accumulating in declaration order.  Repair
+    ;; them after reversal so backend indexes always equal source order.
+    (loop for field in fields for index from 0
+          do (setf (slot-value field 'index) index))
+    (setf (semantic-type-declaration-fields semantic-declaration) fields
+          (semantic-type-declaration-type semantic-declaration)
+          (type-context-product-type context declaration fields))))
 
 (defun resolve-declaration-types (program semantic-declaration)
   "Attach canonical types to the already name-resolved declaration interface."
@@ -677,7 +784,13 @@ Expression bodies are intentionally untouched: this pass establishes only
 declaration signatures and nominal type identities for the later expression
 type checker."
   (check-type program semantic-program)
-  (create-defined-type-identities program)
+  ;; Product definitions are deliberately resolved in source order.  A field
+  ;; can therefore use only a previously completed product; no incomplete
+  ;; nominal identity or recursive LLVM struct is created here.
+  (dolist (entry (semantic-program-declarations program))
+    (let ((declaration (cdr entry)))
+      (when (typep declaration 'semantic-type-declaration)
+        (resolve-product-type-declaration program declaration))))
   (dolist (entry (semantic-program-declarations program))
     (resolve-declaration-types program (cdr entry)))
   program)
@@ -788,9 +901,36 @@ they represent parameter storage rather than C's accidental value category."
 					 :type (binding-expression-type scope binding syntax)
 					 :addressable addressable :writable writable))))
 
+(defun product-constructor-type (scope syntax)
+  "Return the resolved ProductType selected by constructor head SYNTAX, if any."
+  (when (termis-name-p (syntax-datum syntax))
+    (multiple-value-bind (binding foundp)
+        (semantic-scope-find scope (syntax-datum syntax))
+      (when (and foundp (typep binding 'type-declaration))
+        (let* ((program (semantic-scope-owning-program scope))
+               (semantic (semantic-program-declaration program binding)))
+          (and (typep semantic 'semantic-type-declaration)
+               (semantic-type-declaration-type semantic)))))))
+
+(defun infer-construct-expression (syntax scope product-type argument-syntax)
+  (let ((fields (product-type-fields product-type)))
+    (unless (= (length argument-syntax) (length fields))
+      (error 'wrong-argument-count-error :syntax syntax
+             :expected (length fields) :actual (length argument-syntax)))
+    (make-instance 'construct-expression :syntax syntax :product-type product-type
+                   :fields (loop for argument in argument-syntax
+                                 for field in fields
+                                 collect (check-expression argument scope
+                                                           (product-field-type field)))
+                   :type product-type)))
+
 (defun infer-call-expression (syntax scope)
   (let* ((elements (termis-list-elements (syntax-datum syntax)))
-	 (callee (infer-expression (first elements) scope))
+	 (product-type (product-constructor-type scope (first elements))))
+    (when (typep product-type 'product-type)
+      (return-from infer-call-expression
+        (infer-construct-expression syntax scope product-type (rest elements))))
+    (let* ((callee (infer-expression (first elements) scope))
 	 (callee-type (expression-type callee)))
     (unless (typep callee-type 'function-type)
       (error 'semantic-not-callable-error :syntax (first elements)
@@ -817,7 +957,28 @@ they represent parameter storage rather than C's accidental value category."
 			     :syntax syntax :callee callee :arguments arguments
 			     :operation operation :type (function-type-result callee-type)))
 	    (make-instance 'semantic-call :syntax syntax :callee callee
-			   :arguments arguments :type (function-type-result callee-type)))))))
+			   :arguments arguments :type (function-type-result callee-type))))))))
+
+(defun infer-field-expression (syntax scope)
+  (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
+    (unless (= (length arguments) 2)
+      (error 'invalid-expression-error :syntax syntax
+             :message "field requires a product value and field name"))
+    (let ((value (infer-value-expression (first arguments) scope))
+          (name (syntax-datum (second arguments))))
+      (unless (termis-name-p name)
+        (error 'invalid-expression-error :syntax (second arguments)
+               :message "field name must be a Termis name"))
+      (let ((product-type (expression-type value)))
+        (unless (typep product-type 'product-type)
+          (error 'field-access-requires-product-error :syntax (first arguments)
+                 :message "field access requires a product value" :actual product-type))
+        (multiple-value-bind (field foundp) (product-type-find-field product-type name)
+          (unless foundp
+            (error 'unknown-field-error :syntax (second arguments) :message "UnknownField"
+                   :product-type product-type :name name))
+          (make-instance 'field-expression :syntax syntax :value value :field field
+                         :type (product-field-type field)))))))
 
 (defun infer-sequence-expression (syntax scope)
   (let ((expressions '()))
@@ -1122,6 +1283,8 @@ therefore visible, while the binding being built cannot see itself."
 	     (let ((special (expression-special-form-name syntax)))
 	       (cond ((and special (string= special "do"))
 		      (infer-sequence-expression syntax scope))
+		     ((and special (string= special "field"))
+		      (infer-field-expression syntax scope))
 		     ((and special (string= special "let"))
 		      (infer-let-expression syntax scope))
 		     ((let-definition-name-p special)
@@ -1187,12 +1350,12 @@ therefore visible, while the binding being built cannot see itself."
 	 :message (apply #'format nil control arguments)))
 
 (defun backend-representable-type-p (type)
-  "Whether TYPE has a complete Step 10 backend representation contract.
+  "Whether TYPE has a complete backend representation contract.
 
 Defined types retain their declaration identity and may be used behind a
 pointer.  Their layout is a later type-definition concern, so this predicate
 only accepts their semantic identity here; STRING deliberately remains outside
-the Step 10 primitive model."
+the primitive model."
   (cond ((or (typep type 'unit-type) (typep type 'boolean-type)) t)
 	((typep type 'integer-type) (member (integer-type-width type) '(8 16 32 64)))
 	((typep type 'float-type) (member (float-type-width type) '(32 64)))
@@ -1200,6 +1363,12 @@ the Step 10 primitive model."
 	((typep type 'function-type)
 	 (and (every #'backend-representable-type-p (function-type-parameters type))
 	      (backend-representable-type-p (function-type-result type))))
+	((typep type 'product-type)
+	 (every (lambda (field)
+		  (and (typep field 'product-field)
+		       (typep (product-field-type field) 'termis-type)
+		       (backend-representable-type-p (product-field-type field))))
+		(product-type-fields type)))
 	((typep type 'defined-type) t)
 	(t nil)))
 
@@ -1221,6 +1390,28 @@ the Step 10 primitive model."
     (backend-validation-fail expression "expression type ~A is not backend representable"
 			     (termis-type-name (expression-type expression))))
   (cond
+    ((typep expression 'construct-expression)
+     (let ((product-type (construct-expression-product-type expression))
+	   (values (construct-expression-fields expression)))
+       (unless (and (typep product-type 'product-type)
+		    (same-type-p (expression-type expression) product-type)
+		    (= (length values) (length (product-type-fields product-type))))
+	 (backend-validation-fail expression "product construction is incomplete"))
+       (loop for value in values
+	     for field in (product-type-fields product-type)
+	     do (validate-expression-for-backend value)
+		(unless (same-type-p (expression-type value) (product-field-type field))
+		  (backend-validation-fail expression "product constructor has a non-exact field type")))))
+    ((typep expression 'field-expression)
+     (let* ((value (field-expression-value expression))
+	    (field (field-expression-field expression))
+	    (product-type (expression-type value)))
+       (validate-expression-for-backend value)
+       (unless (and (typep product-type 'product-type)
+		    (typep field 'product-field)
+		    (member field (product-type-fields product-type) :test #'eq)
+		    (same-type-p (expression-type expression) (product-field-type field)))
+	 (backend-validation-fail expression "field access is unresolved or has the wrong type"))))
     ((typep expression 'return-expression)
      (validate-expression-for-backend (return-expression-value expression))
      (unless (and (typep (expression-type expression) 'never-type)
@@ -1372,14 +1563,32 @@ the Step 10 primitive model."
 				  (semantic-function-declaration-return-type declaration)))
 		   (backend-validation-fail (semantic-function-declaration-body declaration)
 					    "function result is not exactly typed"))))
+	      ((typep declaration 'semantic-type-declaration)
+	       (let ((type (semantic-type-declaration-type declaration)))
+		 (unless (and (typep type 'product-type)
+			      (eq (defined-type-declaration type)
+				  (semantic-declaration-source-declaration declaration))
+			      (loop for field in (product-type-fields type)
+				    for index from 0
+				    always (and (typep field 'product-field)
+						(typep (product-field-name field) 'termis-name)
+						(= (product-field-index field) index)
+						(backend-representable-type-p (product-field-type field)))))
+		   (backend-validation-fail nil "product type declaration is incomplete"))))
 	      ((typep declaration 'semantic-constant-declaration)
 	       (let ((initializer (semantic-constant-declaration-initializer declaration)))
+		 (when (typep (semantic-constant-declaration-type declaration) 'product-type)
+		   (backend-validation-fail initializer
+				    "top-level product constants are not supported yet"))
 		 (validate-expression-for-backend initializer)
 		 (unless (same-type-p (expression-type initializer)
 				      (semantic-constant-declaration-type declaration))
 		   (backend-validation-fail initializer "constant initializer is not exactly typed"))))
 	      ((typep declaration 'semantic-variable-declaration)
 	       (let ((initializer (semantic-variable-declaration-initializer declaration)))
+		 (when (typep (semantic-variable-declaration-type declaration) 'product-type)
+		   (backend-validation-fail initializer
+				    "top-level product variables are not supported yet"))
 		 (validate-expression-for-backend initializer)
 		 (unless (same-type-p (expression-type initializer)
 				      (semantic-variable-declaration-type declaration))

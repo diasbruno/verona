@@ -24,8 +24,21 @@
                 (lower-type backend (termis:function-type-result type))
                 (mapcar (lambda (parameter) (lower-type backend parameter))
                         (termis:function-type-parameters type))))
+              ((typep type 'termis:product-type)
+               ;; Product fields are already complete and acyclic by semantic
+               ;; validation.  The named LLVM struct preserves nominal Termis
+               ;; identity; setting its body is a one-shot layout operation.
+               (let ((struct (llvm:struct-create-named
+                              (llvm-backend-context backend)
+                              (llvm-name (termis:defined-type-declaration type)))))
+                 (llvm:struct-set-body
+                  struct
+                  (mapcar (lambda (field)
+                            (lower-type backend (termis:product-field-type field)))
+                          (termis:product-type-fields type)))
+                 struct))
               ;; Defined types have identity, but their field layout is not
-              ;; part of the Step 10 semantic model.  An opaque named LLVM
+              ;; part of the current semantic model.  An opaque named LLVM
               ;; struct preserves that identity for pointer uses.
               ((typep type 'termis:defined-type)
                (llvm:struct-create-named

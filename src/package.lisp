@@ -136,6 +136,7 @@
    #:semantic-declaration-source-declaration
    #:semantic-type-declaration
    #:semantic-type-declaration-type
+   #:semantic-type-declaration-fields
    #:semantic-constant-declaration
    #:semantic-constant-declaration-type-reference
    #:semantic-constant-declaration-type
@@ -182,6 +183,12 @@
    #:primitive-call
    #:primitive-call-operation
    #:conversion-expression
+   #:construct-expression
+   #:construct-expression-product-type
+   #:construct-expression-fields
+   #:field-expression
+   #:field-expression-value
+   #:field-expression-field
    #:sequence-expression
    #:sequence-expression-expressions
    #:let-expression
@@ -243,6 +250,14 @@
    #:function-type-result
    #:defined-type
    #:defined-type-declaration
+   #:product-type
+   #:product-type-fields
+   #:product-type-find-field
+   #:product-field
+   #:product-field-name
+   #:product-field-type
+   #:product-field-index
+   #:product-field-source
    #:type-context
    #:make-type-context
    #:type-context-unit-type
@@ -258,6 +273,7 @@
    #:type-context-pointer-type
    #:type-context-function-type
    #:type-context-defined-type
+   #:type-context-product-type
    #:builtin-type-binding
    #:builtin-type-binding-type
    #:builtin-type-declaration
@@ -287,6 +303,15 @@
    #:wrong-argument-count-error
    #:wrong-argument-count-error-expected
    #:wrong-argument-count-error-actual
+   #:duplicate-field-error
+   #:duplicate-field-error-name
+   #:duplicate-field-error-existing
+   #:recursive-type-not-supported-error
+   #:unknown-field-error
+   #:unknown-field-error-product-type
+   #:unknown-field-error-name
+   #:field-access-requires-product-error
+   #:field-access-requires-product-error-actual
    #:not-addressable-error
    #:not-writable-error
    #:invalid-expression-error

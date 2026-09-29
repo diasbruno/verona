@@ -44,7 +44,7 @@
          (parameters (termis:semantic-function-declaration-parameters declaration))
          (llvm-parameters (llvm:params function)))
     (llvm:position-builder-at-end (llvm-backend-builder backend) entry)
-    ;; Step 10 parameters are writable places.  Keep the calling convention
+    ;; Parameters are writable places.  Keep the calling convention
     ;; values distinct from their allocated semantic storage.
     (loop for parameter in parameters
           for llvm-parameter in llvm-parameters

@@ -27,7 +27,7 @@
 		#:duplicate-declaration-error #:non-definition-top-level-error #:termis-macro-p
 		#:semantic-program-declaration #:semantic-function-declaration
 		#:semantic-program-type-context #:semantic-type-declaration
-		#:semantic-type-declaration-type
+		#:semantic-type-declaration-type #:semantic-type-declaration-fields
 		#:semantic-function-declaration-parameters
 		#:semantic-function-declaration-return-type-reference
 		#:semantic-function-declaration-return-type
@@ -63,13 +63,19 @@
 		#:function-type #:function-type-parameters #:function-type-result
 		#:make-type-context #:type-context-unit-type #:type-context-unit-value
 		#:type-context-unit-representation-type #:unit-machine-representation
-		#:defined-type #:defined-type-declaration #:expected-type-error
+		#:defined-type #:defined-type-declaration #:product-type #:product-type-fields
+		#:product-field #:product-field-name #:product-field-type #:product-field-index
+		#:construct-expression #:construct-expression-product-type #:construct-expression-fields
+		#:field-expression #:field-expression-value #:field-expression-field
+		#:expected-type-error
 		#:type-mismatch-error #:not-writable-error #:not-addressable-error
 		#:non-exhaustive-match-error #:unreachable-pattern-error
 		#:unreachable-expression-error
 		#:make-semantic-scope #:semantic-scope-child #:semantic-scope-bind
 		#:semantic-scope-lookup
 		#:unresolved-name-error #:duplicate-local-binding-error #:invalid-definition-context-error
+		#:duplicate-field-error #:recursive-type-not-supported-error #:unknown-field-error
+		#:field-access-requires-product-error #:wrong-argument-count-error
 		#:validate-for-backend))
 
 (in-package #:termis/tests)
@@ -273,7 +279,7 @@
     (is (typep (second declarations) 'constant-declaration))
     (is (typep (third declarations) 'variable-declaration))
     (is (typep function 'function-declaration))
-    ;; The declaration remains raw syntax even though Step 7 also builds a
+    ;; The declaration remains raw syntax even though the resolver also builds a
     ;; separate resolved semantic body.
     (let* ((body (function-declaration-body function))
 	   (head (first (termis-list-elements (syntax-datum body)))))
@@ -468,7 +474,7 @@
 (test resolves-canonical-primitive-pointer-and-function-types
   (let* ((unit (compile-string
                 (make-compiler)
-                "(type Node (value i32) (next (pointer Node)))\
+                "(type Node ((value i32) (next (pointer i32))))\
                  (variable current (pointer Node) (deref (& current)))\
                  (function distance ((a (pointer Node))\
                                      (b (pointer (pointer i32)))) f64 3.14)\
@@ -798,6 +804,58 @@
     (is (not (eq (first (let-expression-bindings true-let))
                  (first (let-expression-bindings false-let)))))
     (is (eq program (validate-for-backend program)))))
+
+(test resolves-nominal-product-fields-construction-and-access
+  (let* ((unit (compile-string
+		(make-compiler)
+		"(type point ((x i64) (y i64)))
+                 (type size ((x i64) (y i64)))
+                 (function get-x ((p point)) i64 (field p x))
+                 (function main () i64
+                   (let ((p point (point 20 22)))
+                     (%+-primitive-i64 (field p x) (field p y))))"))
+	 (program (compilation-unit-semantic-program unit))
+	 (declarations (unit-declarations unit))
+	 (point (semantic-program-declaration program (first declarations)))
+	 (size (semantic-program-declaration program (second declarations)))
+	 (main (semantic-program-declaration program (fourth declarations)))
+	 (point-type (semantic-type-declaration-type point))
+	 (size-type (semantic-type-declaration-type size))
+	 (fields (product-type-fields point-type))
+	 (body (semantic-function-declaration-body main))
+	 (binding (first (let-expression-bindings body)))
+	 (construct (let-binding-initializer binding)))
+    (is (typep point-type 'product-type))
+    (is (= 2 (length fields)))
+    (is (string= "x" (termis-name-value (product-field-name (first fields)))))
+    (is (= 0 (product-field-index (first fields))))
+    (is (= 1 (product-field-index (second fields))))
+    (is (not (eq point-type size-type)))
+    (is (typep construct 'construct-expression))
+    (is (eq point-type (construct-expression-product-type construct)))
+    (let ((left (first (semantic-call-arguments (let-expression-body body)))))
+      (is (typep left 'field-expression))
+      (is (eq (first fields) (field-expression-field left))))
+    (is (eq program (validate-for-backend program)))))
+
+(test rejects-invalid-product-definitions-construction-and-fields
+  (signals duplicate-field-error
+    (compile-string (make-compiler) "(type point ((x i64) (x i64)))"))
+  (signals recursive-type-not-supported-error
+    (compile-string (make-compiler) "(type node ((next (pointer node))))"))
+  (signals wrong-argument-count-error
+    (compile-string (make-compiler)
+                    "(type point ((x i64) (y i64))) (function main () i64 (field (point 20) x))"))
+  (signals unknown-field-error
+    (compile-string (make-compiler)
+                    "(type point ((x i64))) (function main () i64 (field (point 20) z))"))
+  (signals field-access-requires-product-error
+    (compile-string (make-compiler) "(function main () i64 (field 42 x))"))
+  (signals type-mismatch-error
+    (compile-string (make-compiler)
+                    "(type point ((x i64))) (type size ((x i64)))
+                     (function consume ((value size)) i64 0)
+                     (function main () i64 (consume (point 42)))")))
 
 (defun run-tests ()
   (run! :termis))

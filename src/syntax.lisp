@@ -37,7 +37,7 @@
        (termis-name-p right)
        (string= (termis-name-value left) (termis-name-value right))))
 
-;; These aliases preserve the reader API from the previous foundation step.
+;; These aliases preserve the earlier reader API.
 ;; New compiler code must use TERMIS-NAME rather than the misleading
 ;; TERMIS-SYMBOL name.
 (deftype termis-symbol () 'termis-name)
