@@ -186,6 +186,9 @@
    #:construct-expression
    #:construct-expression-product-type
    #:construct-expression-fields
+   #:sum-construct-expression
+   #:sum-construct-expression-alternative
+   #:sum-construct-expression-arguments
    #:field-expression
    #:field-expression-value
    #:field-expression-field
@@ -217,6 +220,9 @@
    #:wildcard-pattern
    #:binding-pattern
    #:binding-pattern-binding
+   #:constructor-pattern
+   #:constructor-pattern-alternative
+   #:constructor-pattern-payload-patterns
    #:match-case
    #:match-case-syntax
    #:match-case-pattern
@@ -258,6 +264,15 @@
    #:product-field-type
    #:product-field-index
    #:product-field-source
+   #:sum-type
+   #:sum-type-alternatives
+   #:sum-type-find-alternative
+   #:sum-alternative
+   #:sum-alternative-sum-type
+   #:sum-alternative-name
+   #:sum-alternative-index
+   #:sum-alternative-payload-types
+   #:sum-alternative-source
    #:type-context
    #:make-type-context
    #:type-context-unit-type
@@ -274,6 +289,7 @@
    #:type-context-function-type
    #:type-context-defined-type
    #:type-context-product-type
+   #:type-context-sum-type
    #:builtin-type-binding
    #:builtin-type-binding-type
    #:builtin-type-declaration
@@ -306,6 +322,9 @@
    #:duplicate-field-error
    #:duplicate-field-error-name
    #:duplicate-field-error-existing
+   #:duplicate-alternative-error
+   #:duplicate-alternative-error-name
+   #:duplicate-alternative-error-existing
    #:recursive-type-not-supported-error
    #:unknown-field-error
    #:unknown-field-error-product-type

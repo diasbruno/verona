@@ -66,6 +66,11 @@
 		#:defined-type #:defined-type-declaration #:product-type #:product-type-fields
 		#:product-field #:product-field-name #:product-field-type #:product-field-index
 		#:construct-expression #:construct-expression-product-type #:construct-expression-fields
+		#:sum-type #:sum-type-alternatives #:sum-alternative #:sum-alternative-name
+		#:sum-alternative-index #:sum-alternative-payload-types
+		#:sum-construct-expression #:sum-construct-expression-alternative
+		#:sum-construct-expression-arguments #:constructor-pattern
+		#:constructor-pattern-alternative #:constructor-pattern-payload-patterns
 		#:field-expression #:field-expression-value #:field-expression-field
 		#:expected-type-error
 		#:type-mismatch-error #:not-writable-error #:not-addressable-error
@@ -75,6 +80,7 @@
 		#:semantic-scope-lookup
 		#:unresolved-name-error #:duplicate-local-binding-error #:invalid-definition-context-error
 		#:duplicate-field-error #:recursive-type-not-supported-error #:unknown-field-error
+		#:duplicate-alternative-error
 		#:field-access-requires-product-error #:wrong-argument-count-error
 		#:validate-for-backend))
 
@@ -856,6 +862,59 @@
                     "(type point ((x i64))) (type size ((x i64)))
                      (function consume ((value size)) i64 0)
                      (function main () i64 (consume (point 42)))")))
+
+(test resolves-nominal-sums-construction-and-constructor-patterns
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(type option (sum (none) (some i64)))
+                 (type other-option (sum (none) (some i64)))
+                 (function unwrap ((value option)) i64
+                   (match value ((none) 0) ((some x) x)))
+                 (function main () i64 (unwrap (some 42)))"))
+         (program (compilation-unit-semantic-program unit))
+         (declarations (unit-declarations unit))
+         (option (semantic-program-declaration program (first declarations)))
+         (other-option (semantic-program-declaration program (second declarations)))
+         (main (semantic-program-declaration program (fourth declarations)))
+         (option-type (semantic-type-declaration-type option))
+         (other-option-type (semantic-type-declaration-type other-option))
+         (alternatives (sum-type-alternatives option-type))
+         (construct (first (semantic-call-arguments
+                            (semantic-function-declaration-body main)))))
+    (is (typep option-type 'sum-type))
+    (is (not (eq option-type other-option-type)))
+    (is (= 2 (length alternatives)))
+    (is (string= "none" (termis-name-value (sum-alternative-name (first alternatives)))))
+    (is (= 0 (sum-alternative-index (first alternatives))))
+    (is (null (sum-alternative-payload-types (first alternatives))))
+    (is (= 1 (sum-alternative-index (second alternatives))))
+    (is (typep construct 'sum-construct-expression))
+    (is (eq (second alternatives) (sum-construct-expression-alternative construct)))
+    (is (eq program (validate-for-backend program)))))
+
+(test diagnoses-invalid-sum-types-construction-and-matches
+  (signals duplicate-alternative-error
+    (compile-string (make-compiler) "(type bad (sum (ok i64) (ok f64)))"))
+  (signals recursive-type-not-supported-error
+    (compile-string (make-compiler) "(type list (sum (empty) (node (pointer list))))"))
+  (signals wrong-argument-count-error
+    (compile-string (make-compiler)
+                    "(type option (sum (none) (some i64)))
+                     (function main () option (some))"))
+  (signals non-exhaustive-match-error
+    (compile-string (make-compiler)
+                    "(type option (sum (none) (some i64)))
+                     (function main ((value option)) i64 (match value ((some x) x)))"))
+  (signals unreachable-pattern-error
+    (compile-string (make-compiler)
+                    "(type option (sum (none) (some i64)))
+                     (function main ((value option)) i64
+                       (match value ((none) 0) ((none) 1) ((some x) x)))"))
+  ;; A literal payload pattern is partial; the following binding completes it.
+  (compile-string (make-compiler)
+                  "(type option (sum (none) (some i64)))
+                   (function main ((value option)) i64
+                     (match value ((some 0) 10) ((some x) x) ((none) 0)))"))
 
 (defun run-tests ()
   (run! :termis))

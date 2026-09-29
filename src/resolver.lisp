@@ -41,6 +41,19 @@
 (defclass product-type (defined-type)
   ((fields :initarg :fields :reader product-type-fields)))
 
+;; Sums, like products, are nominal through their TypeDeclaration.  Their
+;; alternatives are semantic entities; a backend never has to recover them
+;; from source spellings.
+(defclass sum-type (defined-type)
+  ((alternatives :initarg :alternatives :reader sum-type-alternatives)))
+
+(defclass sum-alternative ()
+  ((sum-type :initarg :sum-type :reader sum-alternative-sum-type)
+   (name :initarg :name :reader sum-alternative-name)
+   (index :initarg :index :reader sum-alternative-index)
+   (payload-types :initarg :payload-types :reader sum-alternative-payload-types)
+   (source :initarg :source :reader sum-alternative-source)))
+
 (defclass product-field ()
   ((name :initarg :name :reader product-field-name)
    (type :initarg :type :reader product-field-type)
@@ -142,6 +155,14 @@ the semantic type of a unit expression remains UnitType."
 	(push (cons declaration type) (type-context-defined-types context))
 	type)))
 
+(defun type-context-sum-type (context declaration alternatives)
+  "Install DECLARATION's complete nominal sum type exactly once."
+  (or (cdr (assoc declaration (type-context-defined-types context) :test #'eq))
+      (let ((type (make-instance 'sum-type :declaration declaration
+                                 :alternatives alternatives)))
+	(push (cons declaration type) (type-context-defined-types context))
+	type)))
+
 ;;; Concrete primitive operations -----------------------------------------
 
 ;; A primitive operation is a Termis semantic entity.  Its KIND is the
@@ -240,7 +261,8 @@ the semantic type of a unit expression remains UnitType."
 
 (defclass semantic-type-declaration (semantic-declaration)
   ((type :initform nil :accessor semantic-type-declaration-type)
-   (fields :initform '() :accessor semantic-type-declaration-fields)))
+   (fields :initform '() :accessor semantic-type-declaration-fields)
+   (alternatives :initform '() :accessor semantic-type-declaration-alternatives)))
 
 (defclass semantic-constant-declaration (semantic-declaration)
   ((type-reference :initform nil
@@ -308,6 +330,9 @@ the semantic type of a unit expression remains UnitType."
 (defclass construct-expression (semantic-expression)
   ((product-type :initarg :product-type :reader construct-expression-product-type)
    (fields :initarg :fields :reader construct-expression-fields)))
+(defclass sum-construct-expression (semantic-expression)
+  ((alternative :initarg :alternative :reader sum-construct-expression-alternative)
+   (arguments :initarg :arguments :reader sum-construct-expression-arguments)))
 (defclass field-expression (semantic-expression)
   ((value :initarg :value :reader field-expression-value)
    (field :initarg :field :reader field-expression-field)))
@@ -341,6 +366,10 @@ the semantic type of a unit expression remains UnitType."
 (defclass wildcard-pattern (pattern) ())
 (defclass binding-pattern (pattern)
   ((binding :initarg :binding :reader binding-pattern-binding)))
+(defclass constructor-pattern (pattern)
+  ((alternative :initarg :alternative :reader constructor-pattern-alternative)
+   (payload-patterns :initarg :payload-patterns
+                     :reader constructor-pattern-payload-patterns)))
 (defclass match-case ()
   ((syntax :initarg :syntax :reader match-case-syntax)
    (pattern :initarg :pattern :reader match-case-pattern)
@@ -558,6 +587,10 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
   ((name :initarg :name :reader duplicate-field-error-name)
    (existing :initarg :existing :reader duplicate-field-error-existing)))
 
+(define-condition duplicate-alternative-error (semantic-error)
+  ((name :initarg :name :reader duplicate-alternative-error-name)
+   (existing :initarg :existing :reader duplicate-alternative-error-existing)))
+
 (define-condition recursive-type-not-supported-error (semantic-error) ())
 
 (define-condition unknown-field-error (semantic-error)
@@ -574,6 +607,14 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
   (let ((field (find name (product-type-fields product-type)
                      :key #'product-field-name :test #'termis-name=)))
     (values field (not (null field)))))
+
+(defun sum-type-find-alternative (sum-type name)
+  "Return SUM-TYPE's alternative named NAME, plus a presence flag."
+  (check-type sum-type sum-type)
+  (check-type name termis-name)
+  (let ((alternative (find name (sum-type-alternatives sum-type)
+                           :key #'sum-alternative-name :test #'termis-name=)))
+    (values alternative (not (null alternative)))))
 
 (defun resolve-type (type-context resolved-type-syntax)
   "Turn resolved type syntax into a canonical, backend-independent type."
@@ -678,6 +719,13 @@ The documented spelling has one list containing every field.  Accepting the
 previous flat spelling keeps source compatibility without changing the
 semantic representation."
   (let ((body (type-declaration-body declaration)))
+    ;; The explicit algebraic spelling is preferred, while the Step 15
+    ;; spellings below remain accepted for source compatibility.
+    (when (and (= (length body) 1) (termis-list-p (syntax-datum (first body))))
+      (let ((elements (termis-list-elements (syntax-datum (first body)))))
+        (when (and elements (termis-name-p (syntax-datum (first elements)))
+                   (string= (termis-name-value (syntax-datum (first elements))) "product"))
+          (return-from product-field-syntaxes (rest elements)))))
     (cond ((and (= (length body) 1) (termis-list-p (syntax-datum (first body)))
 		(let ((elements (termis-list-elements (syntax-datum (first body)))))
 		  (or (null elements)
@@ -704,20 +752,21 @@ semantic representation."
                :message "product field name must be a Termis name"))
       (values name (second elements)))))
 
-(defun ensure-product-field-type-is-complete (program resolved-type-syntax syntax)
-  "Reject self and forward references before a product gets an LLVM layout."
+(defun ensure-type-is-complete (program resolved-type-syntax syntax)
+  "Reject self and forward references before a finite type gets a layout."
   (cond ((typep resolved-type-syntax 'semantic-reference)
          (let ((binding (semantic-reference-binding resolved-type-syntax)))
            (when (typep binding 'type-declaration)
              (let ((semantic (semantic-program-declaration program binding)))
                (unless (and (typep semantic 'semantic-type-declaration)
-                            (typep (semantic-type-declaration-type semantic) 'product-type))
+                            (typep (semantic-type-declaration-type semantic)
+                                   '(or product-type sum-type)))
                  (error 'recursive-type-not-supported-error :syntax syntax
-                        :message "RecursiveTypeNotSupported: product fields may reference only earlier complete types"))))))
+                        :message "RecursiveTypeNotSupported: type members may reference only earlier complete types"))))))
         ((typep resolved-type-syntax 'semantic-pointer-type-syntax)
          ;; Pointer recursion is deferred with all other recursive product
          ;; machinery, even though LLVM could represent some instances.
-         (ensure-product-field-type-is-complete
+         (ensure-type-is-complete
           program (semantic-pointer-type-syntax-target resolved-type-syntax) syntax))))
 
 (defun resolve-product-type-declaration (program semantic-declaration)
@@ -733,7 +782,7 @@ semantic representation."
                                                            (syntax-datum field-syntax)))
                    :message "DuplicateField" :name name :existing existing)))
         (let ((reference (resolve-type-syntax scope type-syntax)))
-          (ensure-product-field-type-is-complete program reference type-syntax)
+          (ensure-type-is-complete program reference type-syntax)
           (push (make-instance 'product-field :name name
                                :type (resolve-type context reference)
                                :index (length fields) :source field-syntax)
@@ -746,6 +795,66 @@ semantic representation."
     (setf (semantic-type-declaration-fields semantic-declaration) fields
           (semantic-type-declaration-type semantic-declaration)
           (type-context-product-type context declaration fields))))
+
+(defun sum-alternative-syntaxes (declaration)
+  (let ((body (type-declaration-body declaration)))
+    (unless (and (= (length body) 1) (termis-list-p (syntax-datum (first body))))
+      (error 'semantic-error :syntax (declaration-source declaration)
+             :message "sum type body must be a (sum ...) form"))
+    (let ((elements (termis-list-elements (syntax-datum (first body)))))
+      (unless (and elements (termis-name-p (syntax-datum (first elements)))
+                   (string= (termis-name-value (syntax-datum (first elements))) "sum"))
+        (error 'semantic-error :syntax (first body)
+               :message "type body must begin with product or sum"))
+      (rest elements))))
+
+(defun parse-sum-alternative-syntax (alternative-syntax)
+  (unless (termis-list-p (syntax-datum alternative-syntax))
+    (error 'semantic-error :syntax alternative-syntax
+           :message "sum alternative must be a (name type...) list"))
+  (let ((elements (termis-list-elements (syntax-datum alternative-syntax))))
+    (unless elements
+      (error 'semantic-error :syntax alternative-syntax
+             :message "sum alternative requires a name"))
+    (let ((name (syntax-datum (first elements))))
+      (unless (termis-name-p name)
+        (error 'semantic-error :syntax (first elements)
+               :message "sum alternative name must be a Termis name"))
+      (values name (rest elements)))))
+
+(defun resolve-sum-type-declaration (program semantic-declaration)
+  (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
+         (scope (semantic-program-module-scope program))
+         (context (semantic-program-type-context program))
+         ;; Install identity before alternatives, but only after all previous
+         ;; declarations are complete.  A reference to this declaration is
+         ;; still rejected by ENSURE-TYPE-IS-COMPLETE.
+         (sum-type (type-context-sum-type context declaration '()))
+         (alternatives '()))
+    (dolist (alternative-syntax (sum-alternative-syntaxes declaration))
+      (multiple-value-bind (name payload-syntaxes)
+          (parse-sum-alternative-syntax alternative-syntax)
+        (let ((existing (find name alternatives :key #'sum-alternative-name
+                              :test #'termis-name=)))
+          (when existing
+            (error 'duplicate-alternative-error :syntax alternative-syntax
+                   :message "DuplicateAlternative" :name name :existing existing)))
+        (let ((payload-types
+                (mapcar (lambda (payload-syntax)
+                          (let ((reference (resolve-type-syntax scope payload-syntax)))
+                            (ensure-type-is-complete program reference payload-syntax)
+                            (resolve-type context reference)))
+                        payload-syntaxes)))
+          (push (make-instance 'sum-alternative :sum-type sum-type :name name
+                               :index (length alternatives)
+                               :payload-types payload-types :source alternative-syntax)
+                alternatives))))
+    (setf alternatives (nreverse alternatives))
+    (loop for alternative in alternatives for index from 0
+          do (setf (slot-value alternative 'index) index))
+    (setf (slot-value sum-type 'alternatives) alternatives
+          (semantic-type-declaration-alternatives semantic-declaration) alternatives
+          (semantic-type-declaration-type semantic-declaration) sum-type)))
 
 (defun resolve-declaration-types (program semantic-declaration)
   "Attach canonical types to the already name-resolved declaration interface."
@@ -784,13 +893,20 @@ Expression bodies are intentionally untouched: this pass establishes only
 declaration signatures and nominal type identities for the later expression
 type checker."
   (check-type program semantic-program)
-  ;; Product definitions are deliberately resolved in source order.  A field
-  ;; can therefore use only a previously completed product; no incomplete
-  ;; nominal identity or recursive LLVM struct is created here.
+  ;; Finite product and sum definitions are resolved in source order.  Members
+  ;; can use only a previously completed type; recursion is deferred.
   (dolist (entry (semantic-program-declarations program))
     (let ((declaration (cdr entry)))
       (when (typep declaration 'semantic-type-declaration)
-        (resolve-product-type-declaration program declaration))))
+        (let* ((source (semantic-declaration-source-declaration declaration))
+               (body (type-declaration-body source))
+               (first-body (first body))
+               (head (and first-body (termis-list-p (syntax-datum first-body))
+                          (first (termis-list-elements (syntax-datum first-body))))))
+          (if (and head (termis-name-p (syntax-datum head))
+                   (string= (termis-name-value (syntax-datum head)) "sum"))
+              (resolve-sum-type-declaration program declaration)
+              (resolve-product-type-declaration program declaration))))))
   (dolist (entry (semantic-program-declarations program))
     (resolve-declaration-types program (cdr entry)))
   program)
@@ -923,6 +1039,25 @@ they represent parameter storage rather than C's accidental value category."
                                  collect (check-expression argument scope
                                                            (product-field-type field)))
                    :type product-type)))
+
+(defun infer-sum-construct-expression (syntax scope sum-type alternative argument-syntax)
+  (let ((payload-types (sum-alternative-payload-types alternative)))
+    (unless (= (length argument-syntax) (length payload-types))
+      (error 'wrong-argument-count-error :syntax syntax
+             :expected (length payload-types) :actual (length argument-syntax)))
+    (make-instance 'sum-construct-expression :syntax syntax
+                   :alternative alternative
+                   :arguments (loop for argument in argument-syntax
+                                    for payload-type in payload-types
+                                    collect (check-expression argument scope payload-type))
+                   :type sum-type)))
+
+(defun expected-sum-constructor (syntax expected-type)
+  "Resolve a constructor name only in the supplied expected sum type."
+  (when (and (typep expected-type 'sum-type) (termis-list-p (syntax-datum syntax)))
+    (let ((head (first (termis-list-elements (syntax-datum syntax)))) )
+      (when (and head (termis-name-p (syntax-datum head)))
+        (sum-type-find-alternative expected-type (syntax-datum head))))))
 
 (defun infer-call-expression (syntax scope)
   (let* ((elements (termis-list-elements (syntax-datum syntax)))
@@ -1075,7 +1210,38 @@ therefore visible, while the binding being built cannot see itself."
 (defun analyze-pattern (syntax scope scrutinee-type)
   "Resolve one source pattern and install a binding in the case scope." 
   (let ((datum (syntax-datum syntax)))
-    (cond ((termis-boolean-literal-p datum)
+    (cond ((termis-list-p datum)
+           (unless (typep scrutinee-type 'sum-type)
+             (error 'invalid-expression-error :syntax syntax
+                    :message "constructor patterns require a sum scrutinee"))
+           (let ((elements (termis-list-elements datum)))
+             (unless elements
+               (error 'invalid-expression-error :syntax syntax
+                      :message "constructor pattern requires an alternative name"))
+             (let ((name (syntax-datum (first elements))))
+               (unless (termis-name-p name)
+                 (error 'invalid-expression-error :syntax (first elements)
+                        :message "constructor pattern name must be a Termis name"))
+               (multiple-value-bind (alternative foundp)
+                   (sum-type-find-alternative scrutinee-type name)
+                 (unless foundp
+                   (error 'invalid-expression-error :syntax (first elements)
+                          :message "unknown sum alternative"))
+                 (let ((payload-syntaxes (rest elements))
+                       (payload-types (sum-alternative-payload-types alternative)))
+                   (unless (= (length payload-syntaxes) (length payload-types))
+                     (error 'wrong-argument-count-error :syntax syntax
+                            :expected (length payload-types) :actual (length payload-syntaxes)))
+                   (make-instance 'constructor-pattern :syntax syntax :type scrutinee-type
+                                  :alternative alternative
+                                  :payload-patterns
+                                  (loop for payload-syntax in payload-syntaxes
+                                        for payload-type in payload-types
+                                        do (when (termis-list-p (syntax-datum payload-syntax))
+                                             (error 'invalid-expression-error :syntax payload-syntax
+                                                    :message "nested constructor patterns are not supported yet"))
+                                        collect (analyze-pattern payload-syntax scope payload-type))))))))
+          ((termis-boolean-literal-p datum)
 	   (unless (typep scrutinee-type 'boolean-type)
 	     (error 'type-mismatch-error :syntax syntax
 		    :actual (type-context-boolean-type (semantic-scope-owning-type-context scope))
@@ -1102,8 +1268,17 @@ therefore visible, while the binding being built cannot see itself."
 (defun pattern-catches-all-p (pattern)
   (or (typep pattern 'wildcard-pattern) (typep pattern 'binding-pattern)))
 
+(defun constructor-pattern-complete-p (pattern)
+  (and (typep pattern 'constructor-pattern)
+       (every #'pattern-catches-all-p (constructor-pattern-payload-patterns pattern))))
+
 (defun pattern-already-covered-p (pattern covered)
   (or (and (pattern-catches-all-p covered) t)
+      (and (typep pattern 'constructor-pattern)
+           (typep covered 'constructor-pattern)
+           (eq (constructor-pattern-alternative pattern)
+               (constructor-pattern-alternative covered))
+           (constructor-pattern-complete-p covered))
       (and (typep pattern 'boolean-pattern) (typep covered 'boolean-pattern)
 	   (eql (literal-pattern-value pattern) (literal-pattern-value covered)))
       (and (typep pattern 'integer-pattern) (typep covered 'integer-pattern)
@@ -1118,15 +1293,37 @@ therefore visible, while the binding being built cannot see itself."
 		 :message "pattern is unreachable"
 		 :covering-pattern (find-if (lambda (prior) (pattern-already-covered-p pattern prior)) covered)))
 	(push pattern covered)))
-    (unless (or (find-if #'pattern-catches-all-p covered)
-		(and (typep scrutinee-type 'boolean-type)
-		     (find-if (lambda (p) (and (typep p 'boolean-pattern)
-						  (literal-pattern-value p))) covered)
-		     (find-if (lambda (p) (and (typep p 'boolean-pattern)
-						  (not (literal-pattern-value p)))) covered)))
-      (error 'non-exhaustive-match-error :syntax syntax
-	     :message "match is not exhaustive"
-	     :uncovered (if (typep scrutinee-type 'boolean-type) "true or false" "a catch-all pattern")))))
+    (labels ((complete-alternative-p (alternative)
+               (find-if (lambda (pattern)
+                          (and (typep pattern 'constructor-pattern)
+                               (eq (constructor-pattern-alternative pattern) alternative)
+                               (constructor-pattern-complete-p pattern)))
+                        covered)))
+      (unless (or (find-if #'pattern-catches-all-p covered)
+                  (and (typep scrutinee-type 'sum-type)
+                       (every #'complete-alternative-p
+                              (sum-type-alternatives scrutinee-type)))
+                  (and (typep scrutinee-type 'boolean-type)
+                       (find-if (lambda (p)
+                                  (and (typep p 'boolean-pattern)
+                                       (literal-pattern-value p)))
+                                covered)
+                       (find-if (lambda (p)
+                                  (and (typep p 'boolean-pattern)
+                                       (not (literal-pattern-value p))))
+                                covered)))
+        (error 'non-exhaustive-match-error :syntax syntax
+               :message "match is not exhaustive"
+               :uncovered
+               (cond ((typep scrutinee-type 'boolean-type) "true or false")
+                     ((typep scrutinee-type 'sum-type)
+                      (format nil "~{~A~^, ~}"
+                              (mapcar (lambda (alternative)
+                                        (termis-name-value
+                                         (sum-alternative-name alternative)))
+                                      (remove-if #'complete-alternative-p
+                                                 (sum-type-alternatives scrutinee-type)))))
+                     (t "a catch-all pattern")))))))
 
 (defun parse-match-cases (syntax scope scrutinee-type)
   (let ((case-syntaxes (cddr (termis-list-elements (syntax-datum syntax)))))
@@ -1321,6 +1518,14 @@ therefore visible, while the binding being built cannot see itself."
   (check-type expected-type termis-type)
   (let ((datum (syntax-datum syntax)))
     (cond ((and (termis-list-p datum)
+		(expected-sum-constructor syntax expected-type))
+	   (multiple-value-bind (alternative foundp)
+	       (expected-sum-constructor syntax expected-type)
+	     (declare (ignore foundp))
+	     (infer-sum-construct-expression
+	      syntax scope expected-type alternative
+	      (rest (termis-list-elements datum)))))
+	  ((and (termis-list-p datum)
 		(expression-special-form-name syntax)
 		(string= (expression-special-form-name syntax) "match"))
 	   (let ((expression (infer-match-expression syntax scope expected-type)))
@@ -1369,6 +1574,12 @@ the primitive model."
 		       (typep (product-field-type field) 'termis-type)
 		       (backend-representable-type-p (product-field-type field))))
 		(product-type-fields type)))
+	((typep type 'sum-type)
+	 (every (lambda (alternative)
+		  (and (typep alternative 'sum-alternative)
+		       (every #'backend-representable-type-p
+			      (sum-alternative-payload-types alternative))))
+		(sum-type-alternatives type)))
 	((typep type 'defined-type) t)
 	(t nil)))
 
@@ -1402,6 +1613,21 @@ the primitive model."
 	     do (validate-expression-for-backend value)
 		(unless (same-type-p (expression-type value) (product-field-type field))
 		  (backend-validation-fail expression "product constructor has a non-exact field type")))))
+    ((typep expression 'sum-construct-expression)
+     (let* ((alternative (sum-construct-expression-alternative expression))
+	    (sum-type (and (typep alternative 'sum-alternative)
+			   (sum-alternative-sum-type alternative)))
+	    (arguments (sum-construct-expression-arguments expression)))
+       (unless (and (typep sum-type 'sum-type)
+		    (member alternative (sum-type-alternatives sum-type) :test #'eq)
+		    (same-type-p (expression-type expression) sum-type)
+		    (= (length arguments) (length (sum-alternative-payload-types alternative))))
+	 (backend-validation-fail expression "sum construction is incomplete"))
+       (loop for argument in arguments
+	     for payload-type in (sum-alternative-payload-types alternative)
+	     do (validate-expression-for-backend argument)
+		(unless (same-type-p (expression-type argument) payload-type)
+		  (backend-validation-fail expression "sum constructor has a non-exact payload type")))))
     ((typep expression 'field-expression)
      (let* ((value (field-expression-value expression))
 	    (field (field-expression-field expression))
@@ -1420,7 +1646,8 @@ the primitive model."
     ((typep expression 'match-expression)
      (validate-expression-for-backend (match-expression-value expression))
 	     (unless (or (typep (expression-type (match-expression-value expression)) 'boolean-type)
-			 (typep (expression-type (match-expression-value expression)) 'integer-type))
+			 (typep (expression-type (match-expression-value expression)) 'integer-type)
+			 (typep (expression-type (match-expression-value expression)) 'sum-type))
 	       (backend-validation-fail expression "match scrutinee has no LLVM comparison lowering"))
      (dolist (case (match-expression-cases expression))
        (let ((pattern (match-case-pattern case))
@@ -1435,6 +1662,18 @@ the primitive model."
 			  (same-type-p (pattern-binding-type (binding-pattern-binding pattern))
 				       (pattern-type pattern)))
 	       (backend-validation-fail expression "match binding is unresolved")))
+	   (when (typep pattern 'constructor-pattern)
+	     (let ((alternative (constructor-pattern-alternative pattern)))
+	       (unless (and (typep alternative 'sum-alternative)
+			    (eq (sum-alternative-sum-type alternative)
+				(expression-type (match-expression-value expression)))
+			    (= (length (constructor-pattern-payload-patterns pattern))
+			       (length (sum-alternative-payload-types alternative))))
+		 (backend-validation-fail expression "constructor pattern is unresolved"))
+	       (loop for payload-pattern in (constructor-pattern-payload-patterns pattern)
+		     for payload-type in (sum-alternative-payload-types alternative)
+		     do (unless (same-type-p (pattern-type payload-pattern) payload-type)
+			  (backend-validation-fail expression "constructor payload pattern has the wrong type")))))
 	   (validate-expression-for-backend branch)
 	   (unless (or (typep (expression-type branch) 'never-type)
 		       (same-type-p (expression-type branch) (expression-type expression)))
@@ -1565,30 +1804,39 @@ the primitive model."
 					    "function result is not exactly typed"))))
 	      ((typep declaration 'semantic-type-declaration)
 	       (let ((type (semantic-type-declaration-type declaration)))
-		 (unless (and (typep type 'product-type)
+		 (unless (and (typep type '(or product-type sum-type))
 			      (eq (defined-type-declaration type)
 				  (semantic-declaration-source-declaration declaration))
-			      (loop for field in (product-type-fields type)
-				    for index from 0
-				    always (and (typep field 'product-field)
-						(typep (product-field-name field) 'termis-name)
-						(= (product-field-index field) index)
-						(backend-representable-type-p (product-field-type field)))))
-		   (backend-validation-fail nil "product type declaration is incomplete"))))
+			      (if (typep type 'product-type)
+				  (loop for field in (product-type-fields type)
+					for index from 0
+					always (and (typep field 'product-field)
+						    (typep (product-field-name field) 'termis-name)
+						    (= (product-field-index field) index)
+						    (backend-representable-type-p (product-field-type field))))
+				  (loop for alternative in (sum-type-alternatives type)
+					for index from 0
+					always (and (typep alternative 'sum-alternative)
+						    (eq (sum-alternative-sum-type alternative) type)
+						    (typep (sum-alternative-name alternative) 'termis-name)
+						    (= (sum-alternative-index alternative) index)
+						    (every #'backend-representable-type-p
+							   (sum-alternative-payload-types alternative))))))
+		   (backend-validation-fail nil "type declaration is incomplete"))))
 	      ((typep declaration 'semantic-constant-declaration)
 	       (let ((initializer (semantic-constant-declaration-initializer declaration)))
-		 (when (typep (semantic-constant-declaration-type declaration) 'product-type)
+		 (when (typep (semantic-constant-declaration-type declaration) '(or product-type sum-type))
 		   (backend-validation-fail initializer
-				    "top-level product constants are not supported yet"))
+			    "top-level aggregate constants are not supported yet"))
 		 (validate-expression-for-backend initializer)
 		 (unless (same-type-p (expression-type initializer)
 				      (semantic-constant-declaration-type declaration))
 		   (backend-validation-fail initializer "constant initializer is not exactly typed"))))
 	      ((typep declaration 'semantic-variable-declaration)
 	       (let ((initializer (semantic-variable-declaration-initializer declaration)))
-		 (when (typep (semantic-variable-declaration-type declaration) 'product-type)
+		 (when (typep (semantic-variable-declaration-type declaration) '(or product-type sum-type))
 		   (backend-validation-fail initializer
-				    "top-level product variables are not supported yet"))
+			    "top-level aggregate variables are not supported yet"))
 		 (validate-expression-for-backend initializer)
 		 (unless (same-type-p (expression-type initializer)
 				      (semantic-variable-declaration-type declaration))

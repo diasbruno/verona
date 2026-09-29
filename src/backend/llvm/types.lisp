@@ -37,6 +37,27 @@
                             (lower-type backend (termis:product-field-type field)))
                           (termis:product-type-fields type)))
                  struct))
+              ((typep type 'termis:sum-type)
+               ;; The frontend knows only alternatives and payload types.  This
+               ;; backend chooses a deterministic i32 tag followed by one
+               ;; target-lowered payload aggregate per alternative.  Empty
+               ;; payload aggregates represent zero-payload alternatives;
+               ;; they are representation detail, never semantic unit values.
+               (let ((struct (llvm:struct-create-named
+                              (llvm-backend-context backend)
+                              (llvm-name (termis:defined-type-declaration type)))))
+                 (llvm:struct-set-body
+                  struct
+                  (cons (llvm:int-type 32 :context (llvm-backend-context backend))
+                        (mapcar (lambda (alternative)
+                                  (llvm:struct-type
+                                   (mapcar (lambda (payload-type)
+                                             (lower-type backend payload-type))
+                                           (termis:sum-alternative-payload-types alternative))
+                                   nil :context (llvm-backend-context backend)))
+                                (termis:sum-type-alternatives type)))
+                  nil)
+                 struct))
               ;; Defined types have identity, but their field layout is not
               ;; part of the current semantic model.  An opaque named LLVM
               ;; struct preserves that identity for pointer uses.

@@ -38,6 +38,78 @@
 			(if value 1 0)
 			value))))
 
+(defun sum-payload-aggregate (backend sum-value alternative)
+  (llvm:build-extract-value (llvm-backend-builder backend) sum-value
+                            (1+ (termis:sum-alternative-index alternative))
+                            "sum.payload"))
+
+(defun emit-pattern-bindings (backend scrutinee pattern)
+  "Populate semantic PatternBinding identities after a case is selected."
+  (cond
+    ((typep pattern 'termis:binding-pattern)
+     (setf (backend-binding backend (termis:binding-pattern-binding pattern)) scrutinee))
+    ((typep pattern 'termis:constructor-pattern)
+     (let ((payload (sum-payload-aggregate
+                     backend scrutinee (termis:constructor-pattern-alternative pattern))))
+       (loop for payload-pattern in (termis:constructor-pattern-payload-patterns pattern)
+             for index from 0
+             do (when (typep payload-pattern 'termis:binding-pattern)
+	                  (setf (backend-binding backend
+	                                         (termis:binding-pattern-binding payload-pattern))
+	                        (llvm:build-extract-value (llvm-backend-builder backend)
+	                                                  payload index "sum.binding"))))))))
+
+(defun emit-match-dispatch (backend scrutinee pattern target fallback function)
+  "Emit one ordered pattern test and leave the builder at FALLBACK."
+  (let ((builder (llvm-backend-builder backend)))
+    (cond
+      ((or (typep pattern 'termis:wildcard-pattern)
+           (typep pattern 'termis:binding-pattern))
+       (llvm:build-br builder target))
+      ((typep pattern 'termis:constructor-pattern)
+       (let* ((alternative (termis:constructor-pattern-alternative pattern))
+              (tag (llvm:build-extract-value builder scrutinee 0 "sum.tag"))
+              (tag-match (llvm:build-i-cmp
+                          builder := tag
+                          (llvm:const-int (llvm:int-type 32
+                                                         :context (llvm-backend-context backend))
+                                          (termis:sum-alternative-index alternative))
+                          "sum.tag.match"))
+              (literal-patterns
+                (loop for payload-pattern in (termis:constructor-pattern-payload-patterns pattern)
+                      for index from 0
+                      unless (or (typep payload-pattern 'termis:wildcard-pattern)
+                                 (typep payload-pattern 'termis:binding-pattern))
+                        collect (cons index payload-pattern))))
+         (if (null literal-patterns)
+             (llvm:build-cond-br builder tag-match target fallback)
+             (let ((first-test (llvm:append-basic-block function "sum.payload.test"
+                                                         :context (llvm-backend-context backend))))
+               (llvm:build-cond-br builder tag-match first-test fallback)
+               (llvm:position-builder-at-end builder first-test)
+               (let ((payload (sum-payload-aggregate backend scrutinee alternative)))
+                 (loop for remaining on literal-patterns
+                       for entry = (car remaining)
+                       for next = (if (cdr remaining)
+                                      (llvm:append-basic-block function "sum.payload.test"
+                                                               :context (llvm-backend-context backend))
+                                      target)
+                       do (let ((matches (llvm:build-i-cmp
+                                          builder :=
+                                          (llvm:build-extract-value builder payload (car entry)
+                                                                    "sum.payload.value")
+                                          (match-pattern-constant backend (cdr entry))
+                                          "sum.payload.match")))
+	                            (llvm:build-cond-br builder matches next fallback)
+	                            (when (cdr remaining)
+	                              (llvm:position-builder-at-end builder next)))))))))
+      (t
+       (llvm:build-cond-br builder
+                           (llvm:build-i-cmp builder := scrutinee
+                                             (match-pattern-constant backend pattern) "match.test")
+                           target fallback)))
+    (llvm:position-builder-at-end builder fallback)))
+
 (defun emit-match-value (backend expression)
   "Lower a resolved match without re-evaluating its scrutinee.
 
@@ -58,26 +130,19 @@ only job here is to form the CFG and merge non-terminating case values."
 					       :context (llvm-backend-context backend))))
 	 (default-block (llvm:append-basic-block function "match.unreachable"
 					  :context (llvm-backend-context backend))))
-    ;; Dispatch.  A wildcard/binding reaches its case directly; literal
-    ;; patterns form a comparison chain.  The default is semantically dead.
+    ;; Dispatch is ordered.  Constructor tag and literal payload tests are
+    ;; resolved from semantic identities; no source-name lookup reaches LLVM.
     (loop for case in cases
 	  for block in case-blocks
 	  for remaining on cases
 	  for pattern = (termis:match-case-pattern case)
-	  do (if (or (typep pattern 'termis:wildcard-pattern)
-		     (typep pattern 'termis:binding-pattern))
-		 (llvm:build-br builder block)
-		 (let ((next (if (cdr remaining)
-				 (llvm:append-basic-block function "match.test"
-							  :context (llvm-backend-context backend))
-				 default-block)))
-		   (llvm:build-cond-br
-		    builder
-		    (llvm:build-i-cmp builder := scrutinee
-				      (match-pattern-constant backend pattern) "match.test")
-		    block next)
-		   (when (cdr remaining)
-		     (llvm:position-builder-at-end builder next)))))
+          do (emit-match-dispatch
+              backend scrutinee pattern block
+              (if (cdr remaining)
+                  (llvm:append-basic-block function "match.test"
+                                           :context (llvm-backend-context backend))
+                  default-block)
+              function))
     (llvm:position-builder-at-end builder default-block)
     (llvm:build-unreachable builder)
     (let ((incoming '()))
@@ -85,8 +150,7 @@ only job here is to form the CFG and merge non-terminating case values."
 	    for block in case-blocks
 	    do (llvm:position-builder-at-end builder block)
 	       (let ((pattern (termis:match-case-pattern case)))
-		 (when (typep pattern 'termis:binding-pattern)
-		   (setf (backend-binding backend (termis:binding-pattern-binding pattern)) scrutinee)))
+		 (emit-pattern-bindings backend scrutinee pattern))
 	       (let ((branch (termis:match-case-expression case)))
 		 (let ((value (emit-value backend branch))
 		       (source (llvm:insertion-block builder)))
@@ -131,6 +195,28 @@ only job here is to form the CFG and merge non-terminating case values."
                                                (emit-value backend value-expression)
                                                index "product.insert")))
        aggregate))
+    ((typep expression 'termis:sum-construct-expression)
+     (let* ((alternative (termis:sum-construct-expression-alternative expression))
+            (sum-type (termis:sum-alternative-sum-type alternative))
+            (aggregate (llvm:undef (lower-type backend sum-type)))
+            (aggregate (llvm:build-insert-value
+                        (llvm-backend-builder backend) aggregate
+                        (llvm:const-int (llvm:int-type 32 :context (llvm-backend-context backend))
+                                        (termis:sum-alternative-index alternative))
+                        0 "sum.tag"))
+            (payload (llvm:undef
+                      (llvm:struct-type
+                       (mapcar (lambda (payload-type) (lower-type backend payload-type))
+                               (termis:sum-alternative-payload-types alternative))
+                       nil :context (llvm-backend-context backend)))))
+       (loop for value-expression in (termis:sum-construct-expression-arguments expression)
+             for index from 0
+             do (setf payload (llvm:build-insert-value (llvm-backend-builder backend)
+                                                       payload (emit-value backend value-expression)
+                                                       index "sum.payload.insert")))
+       (llvm:build-insert-value (llvm-backend-builder backend) aggregate payload
+                                (1+ (termis:sum-alternative-index alternative))
+                                "sum.payload")))
     ((typep expression 'termis:field-expression)
      (let ((field (termis:field-expression-field expression)))
        ;; The resolver records ProductField identity and index.  LLVM never
