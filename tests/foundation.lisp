@@ -43,6 +43,8 @@
 		#:primitive-operation-result-type #:primitive-operation-nan-semantics
 		#:integer-literal #:boolean-literal #:string-literal
 		#:sequence-expression #:sequence-expression-expressions
+		#:let-expression #:let-expression-bindings #:let-expression-scope #:let-expression-body
+		#:let-binding #:let-binding-type #:let-binding-initializer
 		#:match-expression #:match-expression-value #:match-expression-cases
 		#:match-case #:match-case-pattern #:match-case-scope #:match-case-expression
 		#:boolean-pattern #:integer-pattern #:wildcard-pattern #:binding-pattern
@@ -67,7 +69,7 @@
 		#:unreachable-expression-error
 		#:make-semantic-scope #:semantic-scope-child #:semantic-scope-bind
 		#:semantic-scope-lookup
-		#:unresolved-name-error #:duplicate-local-binding-error
+		#:unresolved-name-error #:duplicate-local-binding-error #:invalid-definition-context-error
 		#:validate-for-backend))
 
 (in-package #:termis/tests)
@@ -672,6 +674,130 @@
     (compile-string (make-compiler) "(function bad ((x bool)) i64 (match x (true 1) (true 2) (false 3)))"))
   (signals unreachable-expression-error
     (compile-string (make-compiler) "(function bad () i64 (do (return 1) 2))")))
+
+(test resolves-a-basic-let-binding
+  (let* ((unit (compile-string (make-compiler)
+                               "(function basic () i64 (let ((x i64 42)) x))"))
+         (program (compilation-unit-semantic-program unit))
+         (function (semantic-program-declaration program (first (unit-declarations unit))))
+         (let-expression (semantic-function-declaration-body function))
+         (binding (first (let-expression-bindings let-expression))))
+    (is (typep let-expression 'let-expression))
+    (is (typep binding 'let-binding))
+    (is (eq (let-binding-type binding) (semantic-expression-type let-expression)))
+    (is (eq binding (semantic-reference-binding (let-expression-body let-expression))))
+    (is (eq program (validate-for-backend program)))))
+
+(test resolves-let-bindings-sequentially
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(function sequential () i64 (let ((x i64 20) (y i64 (%+-primitive-i64 x 22))) y))"))
+         (program (compilation-unit-semantic-program unit))
+         (function (semantic-program-declaration program (first (unit-declarations unit))))
+         (let-expression (semantic-function-declaration-body function))
+         (bindings (let-expression-bindings let-expression))
+         (x (first bindings))
+         (y (second bindings)))
+    (is (= 2 (length bindings)))
+    (is (eq x (semantic-reference-binding
+               (first (semantic-call-arguments (let-binding-initializer y))))))
+    (is (eq y (semantic-reference-binding (let-expression-body let-expression))))
+    (is (eq program (validate-for-backend program)))))
+
+(test resolves-nested-let-shadowing-by-binding-identity
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(function shadow () i64 (let ((x i64 10)) (let ((x i64 42)) x)))"))
+         (program (compilation-unit-semantic-program unit))
+         (function (semantic-program-declaration program (first (unit-declarations unit))))
+         (outer-let (semantic-function-declaration-body function))
+         (inner-let (let-expression-body outer-let))
+         (outer-binding (first (let-expression-bindings outer-let)))
+         (inner-binding (first (let-expression-bindings inner-let))))
+    (is (not (eq outer-binding inner-binding)))
+    (is (eq inner-binding
+            (semantic-reference-binding (let-expression-body inner-let))))
+    (is (eq program (validate-for-backend program)))))
+
+(test resolves-a-let-initializer-before-its-own-binding
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(function initializer-scope () i64 (let ((x i64 10)) (let ((x i64 x)) x)))"))
+         (program (compilation-unit-semantic-program unit))
+         (function (semantic-program-declaration program (first (unit-declarations unit))))
+         (outer-let (semantic-function-declaration-body function))
+         (inner-let (let-expression-body outer-let))
+         (outer-binding (first (let-expression-bindings outer-let)))
+         (inner-binding (first (let-expression-bindings inner-let))))
+    ;; The inner initializer is resolved before its own binding is installed.
+    (is (eq outer-binding
+            (semantic-reference-binding (let-binding-initializer inner-binding))))
+    (is (eq inner-binding
+            (semantic-reference-binding (let-expression-body inner-let))))
+    (is (eq program (validate-for-backend program)))))
+
+(test propagates-never-through-let
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(function terminating () i64 (let ((x i64 10)) (return x)))"))
+         (program (compilation-unit-semantic-program unit))
+         (function (semantic-program-declaration program (first (unit-declarations unit))))
+         (let-expression (semantic-function-declaration-body function)))
+    (is (typep (semantic-expression-type let-expression) 'never-type))
+    (is (eq program (validate-for-backend program)))))
+
+(test rejects-duplicate-names-in-one-let-binding-list
+  (signals duplicate-local-binding-error
+    (compile-string (make-compiler)
+                    "(function duplicate () i64 (let ((x i64 10) (x i64 20)) x))")))
+
+(test rejects-recursive-let-initializers
+  (signals unresolved-name-error
+    (compile-string (make-compiler)
+                    "(function recursive () i64 (let ((x i64 x)) x))")))
+
+(test rejects-let-bindings-outside-their-lexical-scope
+  (signals unresolved-name-error
+    (compile-string (make-compiler)
+                    "(function escaped () i64 (do (let ((x i64 10)) x) x))")))
+
+(test rejects-implicitly-converted-let-initializers
+  (signals type-mismatch-error
+    (compile-string (make-compiler)
+                    "(function wrong ((value i32)) i64 (let ((x i64 value)) x))")))
+
+(test rejects-assignment-to-let-bindings
+  (signals not-writable-error
+    (compile-string (make-compiler)
+                    "(function write () i64 (let ((x i64 10)) (assign x 42) x))")))
+
+(test rejects-address-taking-of-let-bindings
+  (signals not-addressable-error
+    (compile-string (make-compiler)
+                    "(function address () (pointer i64) (let ((x i64 10)) (& x)))")))
+
+(test rejects-local-variable-definitions
+  (signals invalid-definition-context-error
+    (compile-string (make-compiler)
+                    "(function local-definition () i64 (variable x i64 10))")))
+
+(test composes-let-with-match-case-scopes
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(function max-plus-ten ((a i64) (b i64)) i64
+                    (match (%>-primitive-i64 a b)
+                      (true (let ((x i64 (%+-primitive-i64 a 10))) x))
+                      (false (let ((x i64 (%+-primitive-i64 b 10))) x))))"))
+         (program (compilation-unit-semantic-program unit))
+         (function (semantic-program-declaration program (first (unit-declarations unit))))
+         (match (semantic-function-declaration-body function))
+         (true-let (match-case-expression (first (match-expression-cases match))))
+         (false-let (match-case-expression (second (match-expression-cases match)))))
+    (is (typep true-let 'let-expression))
+    (is (typep false-let 'let-expression))
+    (is (not (eq (first (let-expression-bindings true-let))
+                 (first (let-expression-bindings false-let)))))
+    (is (eq program (validate-for-backend program)))))
 
 (defun run-tests ()
   (run! :termis))

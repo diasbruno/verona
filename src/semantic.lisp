@@ -145,6 +145,10 @@ parameter bindings before calling this operation."
                            (termis-name-value
                            (duplicate-local-binding-error-name condition))))))))
 
+;; Declarations are collected by the compilation-unit processor.  This keeps
+;; an accidental declaration in executable code distinct from lexical binding.
+(define-condition invalid-definition-context-error (semantic-error) ())
+
 (define-condition non-exhaustive-match-error (semantic-error)
   ((uncovered :initarg :uncovered :reader non-exhaustive-match-error-uncovered))
   (:report (lambda (condition stream)

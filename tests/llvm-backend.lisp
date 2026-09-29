@@ -73,6 +73,31 @@
              (format nil "(function widen ((value i32)) i64 (%sext-primitive-i32-i64 value))~%
                           (function main () i64 (widen 42))")))))
 
+(test lowers-let-bindings-as-ssa-values-and-executes-them
+  (let* ((source (format nil
+                         "(function sequential () i64~%
+                            (let ((x i64 20)~%
+                                  (y i64 (%+-primitive-i64 x 22)))~%
+                              y))~%
+                          (function shadow () i64~%
+                            (let ((x i64 10))~%
+                              (let ((x i64 42)) x)))~%
+                          (function max-plus-ten ((a i64) (b i64)) i64~%
+                            (match (%>-primitive-i64 a b)~%
+                              (true (let ((x i64 (%+-primitive-i64 a 10))) x))~%
+                              (false (let ((x i64 (%+-primitive-i64 b 10))) x))))~%
+                          (function main () i64 (max-plus-ten (sequential) (shadow)))"))
+         (unit (compile-string (make-compiler) source))
+         (backend (termis.backend.llvm:generate-llvm
+                   (compilation-unit-semantic-program unit)))
+         (ir (termis.backend.llvm:print-llvm-module backend)))
+    (is (search "add i64" ir))
+    ;; Only parameter lowering creates storage in the current backend.  The
+    ;; two parameter-free LET functions must therefore remain SSA-only.
+    (is (not (search "alloca" (subseq ir 0 (or (search "define i64 @__termis_00006D" ir)
+                                                 (length ir))))))
+    (is (= 52 (compile-and-run-native source)))))
+
 (test lowers-and-executes-boolean-matches
   (let* ((source (format nil
 			 "(function max ((a i64) (b i64)) i64~%

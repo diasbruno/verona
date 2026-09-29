@@ -20,6 +20,9 @@
 	  ((typep binding 'termis:pattern-binding)
 	   ;; Binding patterns introduce an SSA value, not a mutable place.
 	   (backend-binding backend binding))
+	  ((typep binding 'termis:let-binding)
+	   ;; Immutable LET bindings are SSA values, never implicit stack storage.
+	   (backend-binding backend binding))
           ((typep binding 'termis:constant-declaration)
            (llvm:build-load (llvm-backend-builder backend)
                             (backend-binding backend binding) "constant"
@@ -140,6 +143,14 @@ only job here is to form the CFG and merge non-terminating case values."
                  for value = (emit-value backend child)
                  finally (return value))
            (llvm:const-int (lower-type backend (termis:expression-type expression)) 0))))
+
+    ((typep expression 'termis:let-expression)
+     ;; Binding identity is the environment key, so nested shadowing needs no
+     ;; LLVM-level name lookup or environment restoration.
+     (dolist (binding (termis:let-expression-bindings expression))
+       (setf (backend-binding backend binding)
+             (emit-value backend (termis:let-binding-initializer binding))))
+     (emit-value backend (termis:let-expression-body expression)))
 
     ((typep expression 'termis:return-expression)
      (llvm:build-ret (llvm-backend-builder backend)

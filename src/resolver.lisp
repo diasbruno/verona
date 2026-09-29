@@ -198,6 +198,15 @@ the semantic type of a unit expression remains UnitType."
   ((syntax :initarg :syntax :reader pattern-binding-syntax)
    (type :initarg :type :reader pattern-binding-type)))
 
+;; A LET-BINDING is a semantic identity, not a request for storage.  Its
+;; initializer is resolved before the binding enters its lexical scope.
+(defclass let-binding (semantic-binding)
+  ((syntax :initarg :syntax :reader let-binding-syntax :reader let-binding-source)
+   (type-syntax :initarg :type-syntax :reader let-binding-type-syntax)
+   (type-reference :initarg :type-reference :reader let-binding-type-reference)
+   (type :initarg :type :reader let-binding-type)
+   (initializer :initarg :initializer :reader let-binding-initializer)))
+
 (defclass semantic-program ()
   ((bootstrap-scope :initarg :bootstrap-scope
                     :reader semantic-program-bootstrap-scope)
@@ -279,6 +288,10 @@ the semantic type of a unit expression remains UnitType."
 (defclass conversion-expression (primitive-call) ())
 (defclass sequence-expression (semantic-expression)
   ((expressions :initarg :expressions :reader sequence-expression-expressions)))
+(defclass let-expression (semantic-expression)
+  ((bindings :initarg :bindings :reader let-expression-bindings)
+   (scope :initarg :scope :reader let-expression-scope)
+   (body :initarg :body :reader let-expression-body)))
 (defclass address-expression (semantic-expression)
   ((operand :initarg :operand :reader address-expression-operand)))
 (defclass dereference-expression (semantic-expression place-expression)
@@ -736,6 +749,7 @@ type checker."
   "Return BINDING's runtime type without changing its identity."
   (cond ((typep binding 'parameter-binding) (parameter-binding-type binding))
 	((typep binding 'pattern-binding) (pattern-binding-type binding))
+	((typep binding 'let-binding) (let-binding-type binding))
 	((typep binding 'primitive-binding)
 	 (builtin-intrinsic-binding-type binding))
 	((or (typep binding 'builtin-type-binding)
@@ -818,6 +832,84 @@ they represent parameter storage rather than C's accidental value category."
 						  (expression-type (car (last expressions)))
 						  (type-context-unit-type
 						   (semantic-scope-owning-type-context scope))))))
+
+(defun let-definition-name-p (name)
+  "Whether NAME is a top-level definition spelling used in executable code."
+  (and name
+       (member name '("constant" "variable" "%constant" "%variable")
+               :test #'string=)))
+
+(defun parse-let-binding (binding-syntax scope)
+  "Resolve one LET binding, installing it only after its initializer.
+
+SCOPE is the child scope owned by the enclosing LET.  Earlier bindings are
+therefore visible, while the binding being built cannot see itself."
+  (unless (termis-list-p (syntax-datum binding-syntax))
+    (error 'invalid-expression-error :syntax binding-syntax
+           :message "let binding must be a (name type initializer) list"))
+  (let ((elements (termis-list-elements (syntax-datum binding-syntax))))
+    (unless (= (length elements) 3)
+      (error 'invalid-expression-error :syntax binding-syntax
+             :message "let binding must contain a name, type, and initializer"))
+    (let ((name (syntax-datum (first elements))))
+      (unless (termis-name-p name)
+        (error 'invalid-expression-error :syntax (first elements)
+               :message "let binding name must be a Termis name"))
+      (multiple-value-bind (existing foundp) (semantic-scope-local-find scope name)
+        (when foundp
+          (error 'duplicate-local-binding-error :syntax (first elements)
+                 :name name :existing existing)))
+      (let* ((type-reference (resolve-type-syntax scope (second elements)))
+             (type (resolve-type (semantic-scope-owning-type-context scope)
+                                 type-reference))
+             (initializer (check-expression (third elements) scope type))
+             (binding (make-instance 'let-binding :name name :syntax (first elements)
+                                     :type-syntax (second elements)
+                                     :type-reference type-reference :type type
+                                     :initializer initializer)))
+        (semantic-scope-bind scope name binding)
+        binding))))
+
+(defun infer-let-body (syntax body-syntaxes scope expected-type)
+  "Resolve a LET body as a non-empty expression sequence."
+  (unless body-syntaxes
+    (error 'invalid-expression-error :syntax syntax :message "let requires a body"))
+  (let ((expressions '())
+        (last-syntax (car (last body-syntaxes))))
+    (dolist (form body-syntaxes)
+      (when (and expressions (typep (expression-type (car (last expressions))) 'never-type))
+        (error 'unreachable-expression-error :syntax form
+               :message "expression follows terminating control flow"))
+      (push (if (and expected-type (eq form last-syntax))
+                (check-expression form scope expected-type)
+                (infer-value-expression form scope))
+            expressions))
+    (setf expressions (nreverse expressions))
+    ;; Preserve the direct body node for the common one-expression form.  A
+    ;; multi-form body uses the established sequence representation.
+    (if (null (cdr expressions))
+        (first expressions)
+        (make-instance 'sequence-expression :syntax syntax :expressions expressions
+                       :type (expression-type (car (last expressions)))))))
+
+(defun infer-let-expression (syntax scope &optional expected-type)
+  "Analyze a sequential, immutable lexical LET expression."
+  (let ((elements (termis-list-elements (syntax-datum syntax))))
+    (unless (>= (length elements) 3)
+      (error 'invalid-expression-error :syntax syntax
+             :message "let requires bindings and a body"))
+    (let ((bindings-syntax (second elements)))
+      (unless (termis-list-p (syntax-datum bindings-syntax))
+        (error 'invalid-expression-error :syntax bindings-syntax
+               :message "let bindings must be a list"))
+      (let ((let-scope (semantic-scope-child scope))
+            (bindings '()))
+        (dolist (binding-syntax (termis-list-elements (syntax-datum bindings-syntax)))
+          (push (parse-let-binding binding-syntax let-scope) bindings))
+        (let ((body (infer-let-body syntax (cddr elements) let-scope expected-type)))
+          (make-instance 'let-expression :syntax syntax :scope let-scope
+                         :bindings (nreverse bindings) :body body
+                         :type (expression-type body)))))))
 
 (defun analyze-pattern (syntax scope scrutinee-type)
   "Resolve one source pattern and install a binding in the case scope." 
@@ -1030,6 +1122,11 @@ they represent parameter storage rather than C's accidental value category."
 	     (let ((special (expression-special-form-name syntax)))
 	       (cond ((and special (string= special "do"))
 		      (infer-sequence-expression syntax scope))
+		     ((and special (string= special "let"))
+		      (infer-let-expression syntax scope))
+		     ((let-definition-name-p special)
+		      (error 'invalid-definition-context-error :syntax syntax
+			     :message "constant and variable definitions are only valid at top level"))
 		     ((and special (string= special "match"))
 		      (let ((elements (termis-list-elements datum)))
 			(unless (>= (length elements) 3)
@@ -1065,6 +1162,10 @@ they represent parameter storage rather than C's accidental value category."
 		(string= (expression-special-form-name syntax) "match"))
 	   (let ((expression (infer-match-expression syntax scope expected-type)))
 	     expression))
+	  ((and (termis-list-p datum)
+		(expression-special-form-name syntax)
+		(string= (expression-special-form-name syntax) "let"))
+	   (infer-let-expression syntax scope expected-type))
 	  ((and (integerp datum) (typep expected-type 'integer-type))
 	   (make-instance 'integer-literal :syntax syntax :value datum :type expected-type))
 	  ((and (floatp datum) (typep expected-type 'float-type))
@@ -1147,6 +1248,20 @@ the Step 10 primitive model."
 	   (unless (or (typep (expression-type branch) 'never-type)
 		       (same-type-p (expression-type branch) (expression-type expression)))
 	     (backend-validation-fail expression "match branch has a different result type")))))
+	    ((typep expression 'let-expression)
+	     (dolist (binding (let-expression-bindings expression))
+	       (unless (and (typep binding 'let-binding)
+			    (typep (let-binding-type binding) 'termis-type)
+			    (typep (let-binding-initializer binding) 'expression))
+		 (backend-validation-fail expression "let binding is incomplete"))
+	       (validate-expression-for-backend (let-binding-initializer binding))
+	       (unless (same-type-p (expression-type (let-binding-initializer binding))
+			    (let-binding-type binding))
+		 (backend-validation-fail expression "let initializer is not exactly typed")))
+	     (validate-expression-for-backend (let-expression-body expression))
+	     (unless (same-type-p (expression-type expression)
+			  (expression-type (let-expression-body expression)))
+	       (backend-validation-fail expression "let result type is not its body type")))
     ((typep expression 'unit-expression)
      (unless (typep (expression-type expression) 'unit-type)
        (backend-validation-fail expression "UnitValue does not have UnitType")))

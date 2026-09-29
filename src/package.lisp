@@ -125,6 +125,13 @@
    #:pattern-binding
    #:pattern-binding-syntax
    #:pattern-binding-type
+   #:let-binding
+   #:let-binding-syntax
+   #:let-binding-source
+   #:let-binding-type-syntax
+   #:let-binding-type-reference
+   #:let-binding-type
+   #:let-binding-initializer
    #:semantic-declaration
    #:semantic-declaration-source-declaration
    #:semantic-type-declaration
@@ -177,6 +184,10 @@
    #:conversion-expression
    #:sequence-expression
    #:sequence-expression-expressions
+   #:let-expression
+   #:let-expression-bindings
+   #:let-expression-scope
+   #:let-expression-body
    #:address-expression
    #:address-expression-operand
    #:dereference-expression
@@ -307,6 +318,7 @@
    #:unresolved-name-error
    #:unresolved-name-error-name
    #:duplicate-local-binding-error
+   #:invalid-definition-context-error
    #:compile-string
    #:compile-file
    #:source-error
