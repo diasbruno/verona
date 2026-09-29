@@ -270,8 +270,9 @@ only job here is to form the CFG and merge non-terminating case values."
      (let ((callee (termis:semantic-call-callee expression)))
        (unless (and (typep callee 'termis:reference-expression)
                     (typep (termis:semantic-reference-binding callee)
-                           'termis:function-declaration))
-         (backend-fail "ordinary call has no resolved function declaration"))
+                           '(or termis:function-declaration
+                                termis:semantic-generic-implementation)))
+         (backend-fail "ordinary call has no resolved concrete callable"))
        (llvm:build-call
         (llvm-backend-builder backend)
         (backend-binding backend (termis:semantic-reference-binding callee))

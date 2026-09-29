@@ -36,6 +36,15 @@
     (is (search "add i64" ir))
     (is (search "call i64 @__termis_000061000064000064(i64 20, i64 22)" ir))))
 
+(test lowers-and-executes-generic-dispatch
+  (let ((source
+          "(generic combine (left right))
+           (implementation combine ((a i64) (b i64)) i64 (+ a b))
+           (function twenty () i64 20)
+           (function twenty-two () i64 22)
+           (function main () i64 (combine (twenty) (twenty-two)))"))
+    (is (= 42 (compile-and-run-native source)))))
+
 (test lowers-unit-to-the-target-pointer-width
   (let* ((unit (compile-string (make-compiler) "(function noop () unit unit)"))
          (backend (termis.backend.llvm:generate-llvm

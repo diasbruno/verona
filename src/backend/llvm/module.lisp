@@ -7,6 +7,8 @@
   (dolist (declaration (semantic-declarations program))
     (cond ((typep declaration 'termis:semantic-function-declaration)
            (declare-function backend declaration))
+          ((typep declaration 'termis:semantic-generic-implementation)
+           (declare-generic-implementation backend declaration))
           ((typep declaration 'termis:semantic-variable-declaration)
            (declare-global backend declaration nil))
           ((typep declaration 'termis:semantic-constant-declaration)
@@ -16,6 +18,8 @@
   (dolist (declaration (semantic-declarations program))
     (cond ((typep declaration 'termis:semantic-function-declaration)
            (define-function backend declaration))
+          ((typep declaration 'termis:semantic-generic-implementation)
+           (define-generic-implementation backend declaration))
           ((typep declaration 'termis:semantic-variable-declaration)
            (setf (llvm:initializer (backend-binding backend declaration))
                  (emit-global-constant

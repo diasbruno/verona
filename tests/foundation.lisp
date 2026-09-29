@@ -24,6 +24,8 @@
 		#:macro-declaration #:macro-declaration-parameters #:macro-declaration-body
 		#:constant-declaration #:constant-declaration-type #:constant-declaration-value
 		#:variable-declaration #:variable-declaration-type #:variable-declaration-initializer
+		#:generic-declaration #:generic-declaration-arity
+		#:implementation-declaration
 		#:duplicate-declaration-error #:non-definition-top-level-error #:termis-macro-p
 		#:semantic-program-declaration #:semantic-function-declaration
 		#:semantic-program-type-context #:semantic-type-declaration
@@ -33,6 +35,9 @@
 		#:semantic-function-declaration-return-type
 		#:semantic-function-declaration-type
 		#:semantic-function-declaration-body
+		#:semantic-generic-declaration #:semantic-generic-declaration-generic
+		#:semantic-generic-implementation #:semantic-generic-implementation-type
+		#:generic-arity #:generic-implementations #:generic-implementation-parameter-types
 		#:semantic-constant-declaration-initializer
 		#:semantic-variable-declaration-initializer
 		#:semantic-reference #:semantic-reference-binding
@@ -82,6 +87,8 @@
 		#:duplicate-field-error #:recursive-type-not-supported-error #:unknown-field-error
 		#:duplicate-alternative-error
 		#:field-access-requires-product-error #:wrong-argument-count-error
+		#:generic-arity-mismatch-error #:duplicate-generic-implementation-error
+		#:no-generic-implementation-error
 		#:validate-for-backend))
 
 (in-package #:termis/tests)
@@ -248,17 +255,19 @@
 
 (test bootstraps-the-public-definition-vocabulary-as-macros
   (let ((environment (make-bootstrap-environment)))
-    (dolist (name '("type" "function" "macro" "constant" "variable"))
+    (dolist (name '("type" "function" "macro" "constant" "variable" "generic" "implementation"))
       (is (termis-macro-p
 	   (environment-lookup environment (make-termis-name name)))))))
 
 (test bootstrap-definition-macros-mechanically-rewrite-their-heads
   (let ((environment (make-bootstrap-environment)))
-    (dolist (specification '(("type" . "%type")
+	    (dolist (specification '(("type" . "%type")
 			     ("function" . "%function")
 			     ("macro" . "%macro")
 			     ("constant" . "%constant")
-			     ("variable" . "%variable")))
+			     ("variable" . "%variable")
+                             ("generic" . "%generic")
+                             ("implementation" . "%implementation")))
       (let* ((form (first (read-source
 			   (make-source "expansion.termis"
 					(format nil "(~A declaration payload)"
@@ -915,6 +924,76 @@
                   "(type option (sum (none) (some i64)))
                    (function main ((value option)) i64
                      (match value ((some 0) 10) ((some x) x) ((none) 0)))"))
+
+(test generic-declarations-and-exact-dispatch
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(generic combine (left right))
+                 (implementation combine ((a i64) (b i64)) i64 (+ a b))
+                 (implementation combine ((a f64) (b f64)) f64 (+ a b))
+                 (function integer-main ((x i64) (y i64)) i64 (combine x y))"))
+         (declarations (unit-declarations unit))
+         (generic (first declarations))
+         (program (compilation-unit-semantic-program unit))
+         (semantic-generic (semantic-program-declaration program generic))
+         (integer-main (semantic-program-declaration program (fourth declarations)))
+         (call (semantic-function-declaration-body integer-main)))
+    (is (typep generic 'generic-declaration))
+    (is (= 2 (generic-declaration-arity generic)))
+    (is (typep (second declarations) 'implementation-declaration))
+    (is (typep semantic-generic 'semantic-generic-declaration))
+    (is (= 2 (length (generic-implementations
+                      (semantic-generic-declaration-generic semantic-generic)))))
+    (is (typep call 'semantic-call))
+    (is (typep (semantic-reference-binding (semantic-call-callee call))
+               'semantic-generic-implementation))))
+
+(test generic-arithmetic-selects-primitive-implementation
+  (let* ((unit (compile-string (make-compiler)
+                               "(function add ((a i64) (b i64)) i64 (+ a b))"))
+         (program (compilation-unit-semantic-program unit))
+         (add (semantic-program-declaration program (first (unit-declarations unit))))
+         (body (semantic-function-declaration-body add)))
+    (is (typep body 'primitive-call))
+    (is (eq :integer-add (primitive-operation-kind (primitive-call-operation body))))))
+
+(test generic-mixed-types-require-an-exact-implementation
+  (signals no-generic-implementation-error
+    (compile-string (make-compiler)
+                    "(function mixed ((a i32) (b i64)) i64 (+ a b))")))
+
+(test generic-implementations-must-match-the-declared-arity
+  (signals generic-arity-mismatch-error
+    (compile-string (make-compiler)
+                    "(generic foo (a b)) (implementation foo ((a i64)) i64 a)")))
+
+(test generic-implementation-parameter-names-do-not-affect-dispatch
+  (signals duplicate-generic-implementation-error
+    (compile-string (make-compiler)
+                    "(generic foo (x))
+                     (implementation foo ((x i64)) i64 x)
+                     (implementation foo ((value i64)) i64 value)")))
+
+(test generic-dispatch-uses-nominal-product-identities
+  (let ((unit (compile-string
+               (make-compiler)
+               "(type point (product (x i64) (y i64)))
+                (type vector (product (x i64) (y i64)))
+                (generic combine (a b))
+                (implementation combine ((a point) (b point)) point
+                  (point (+ (field a x) (field b x))
+                         (+ (field a y) (field b y))))
+                (function first-x ((a point) (b point)) i64
+	                  (field (combine a b) x))"))
+        (program nil))
+    (setf program (compilation-unit-semantic-program unit))
+    (let* ((function (semantic-program-declaration program
+                                                  (fifth (unit-declarations unit))))
+           (field (semantic-function-declaration-body function))
+           (call (field-expression-value field)))
+      (is (typep call 'semantic-call))
+      (is (typep (semantic-reference-binding (semantic-call-callee call))
+                 'semantic-generic-implementation)))))
 
 (defun run-tests ()
   (run! :termis))

@@ -9,6 +9,21 @@
           (backend-binding backend declaration) function)
     function))
 
+(defun generic-implementation-llvm-name (declaration)
+  "A generic has no public symbol; each selected implementation does."
+  (format nil "~A_impl_~{~A~^_~}"
+          (llvm-name declaration)
+          (mapcar #'termis:termis-type-name
+                  (termis:generic-implementation-parameter-types declaration))))
+
+(defun declare-generic-implementation (backend declaration)
+  (let ((function (llvm:add-function
+                   (llvm-backend-module backend)
+                   (generic-implementation-llvm-name declaration)
+                   (lower-type backend (termis:semantic-generic-implementation-type declaration)))))
+    (setf (backend-binding backend declaration) function)
+    function))
+
 (defun declare-global (backend declaration constantp)
   (let* ((source (semantic-source-binding declaration))
          (global (llvm:add-global (llvm-backend-module backend)
@@ -60,4 +75,24 @@
       ;; explicit return).  Emitting another instruction would corrupt LLVM.
       (unless (typep (termis:expression-type body) 'termis:never-type)
 	(llvm:build-ret (llvm-backend-builder backend) (emit-value backend body))))
+    function))
+
+(defun define-generic-implementation (backend declaration)
+  (let* ((function (backend-binding backend declaration))
+         (entry (llvm:append-basic-block function "entry" :context (llvm-backend-context backend)))
+         (parameters (termis:generic-implementation-parameters declaration))
+         (llvm-parameters (llvm:params function)))
+    (llvm:position-builder-at-end (llvm-backend-builder backend) entry)
+    (loop for parameter in parameters
+          for llvm-parameter in llvm-parameters
+          do (setf (llvm:value-name llvm-parameter) (llvm-name parameter))
+             (let ((address (llvm:build-alloca
+                             (llvm-backend-builder backend)
+                             (lower-type backend (termis:parameter-binding-type parameter))
+                             (format nil "~A.addr" (llvm-name parameter)))))
+               (llvm:build-store (llvm-backend-builder backend) llvm-parameter address)
+               (setf (backend-binding backend parameter) address)))
+    (let ((body (termis:generic-implementation-body declaration)))
+      (unless (typep (termis:expression-type body) 'termis:never-type)
+        (llvm:build-ret (llvm-backend-builder backend) (emit-value backend body))))
     function))

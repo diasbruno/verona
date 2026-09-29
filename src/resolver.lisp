@@ -204,6 +204,50 @@ the semantic type of a unit expression remains UnitType."
 (defmethod primitive-operation-context ((binding primitive-binding))
   (primitive-binding-context binding))
 
+;;; Compile-time generic dispatch -----------------------------------------
+
+(defclass generic ()
+  ((declaration :initarg :declaration :initform nil :reader generic-declaration)
+   (name :initarg :name :reader generic-name)
+   (arity :initarg :arity :reader generic-arity)
+   ;; Keys are lists of canonical TERMIS-TYPE objects.  EQUAL is intentional:
+   ;; standard objects compare by identity, never by their printed spelling.
+   (implementations :initform '() :accessor generic-implementations)))
+
+(defclass generic-binding (semantic-binding)
+  ((generic :initarg :generic :reader generic-binding-generic)))
+
+(defclass generic-implementation ()
+  ((declaration :initarg :declaration :initform nil
+                :reader generic-implementation-declaration)
+   (generic :initarg :generic :reader generic-implementation-generic)
+   (parameters :initarg :parameters :initform '()
+               :accessor generic-implementation-parameters)
+   (parameter-types :initarg :parameter-types :initform '()
+                    :accessor generic-implementation-parameter-types)
+   (result-type :initarg :result-type :initform nil
+                :accessor generic-implementation-result-type)
+   (body :initarg :body :initform nil :accessor generic-implementation-body)
+   (primitive-operation :initarg :primitive-operation :initform nil
+                        :reader generic-implementation-primitive-operation)
+   (source :initarg :source :initform nil :reader generic-implementation-source)))
+
+(defun generic-find-implementation (generic parameter-types)
+  (cdr (assoc parameter-types (generic-implementations generic) :test #'equal)))
+
+(defun generic-add-implementation (generic implementation &optional syntax)
+  (let ((key (generic-implementation-parameter-types implementation)))
+    (when (generic-find-implementation generic key)
+      (error 'duplicate-generic-implementation-error :syntax syntax
+             :generic generic :parameter-types key
+             :original (generic-find-implementation generic key)
+             :duplicate implementation
+             :original-source (generic-implementation-source
+                               (generic-find-implementation generic key))
+             :duplicate-source syntax))
+    (push (cons key implementation) (generic-implementations generic))
+    implementation))
+
 (defun make-primitive-binding (context name parameter-types result-type kind
 				     &key nan-semantics class)
   (let* ((operation (make-instance 'primitive-operation
@@ -287,6 +331,18 @@ the semantic type of a unit expression remains UnitType."
                 :accessor semantic-function-declaration-return-type)
    (type :initform nil :accessor semantic-function-declaration-type)
    (body :initform nil :accessor semantic-function-declaration-body)))
+
+(defclass semantic-generic-declaration (semantic-declaration)
+  ((generic :initarg :generic :reader semantic-generic-declaration-generic)))
+
+;; A source implementation is both a declaration retained by the program and
+;; the selected concrete callable.  Primitive-backed implementations use the
+;; base GENERIC-IMPLEMENTATION class instead.
+(defclass semantic-generic-implementation (generic-implementation semantic-declaration semantic-binding)
+  ((scope :initform nil :accessor semantic-generic-implementation-scope)
+   (return-type-reference :initform nil
+                          :accessor semantic-generic-implementation-return-type-reference)
+   (type :initform nil :accessor semantic-generic-implementation-type)))
 
 ;; EXPRESSION is the typed runtime semantic model.  The SEMANTIC-* classes
 ;; remain concrete compatibility names for clients of the earlier passes.
@@ -509,6 +565,57 @@ than recovered later through ad-hoc string comparisons."
 			("*" :integer-multiply) ("/" :integer-divide)))
 	  (bind (first spec) (list i32 i32) i32 (second spec)
 		:class 'builtin-intrinsic-binding)))
+      ;; Surface arithmetic and comparison are compile-time generics.  The
+      ;; older concrete i32 aliases above remain available as primitives for
+      ;; bootstrap code and backwards compatibility.
+      (labels ((install (name arity)
+                 (let ((generic (make-instance 'generic :name (make-termis-name name)
+                                                 :arity arity)))
+                   (semantic-scope-bind scope (generic-name generic)
+                                        (make-instance 'generic-binding
+                                                       :name (generic-name generic)
+                                                       :generic generic))
+                   generic))
+               (primitive (name)
+                 (primitive-binding-operation
+                  (semantic-scope-lookup scope (make-termis-name name))))
+               (add (generic name)
+                 (let ((operation (primitive name)))
+                   (generic-add-implementation
+                    generic
+                    (make-instance 'generic-implementation :generic generic
+                                   :parameter-types (primitive-operation-parameter-types operation)
+                                   :result-type (primitive-operation-result-type operation)
+                                   :primitive-operation operation)))))
+        (dolist (operator '("+" "-" "*" "/" "==" "!=" "<" "<=" ">" ">="))
+          (let ((generic (install operator 2)))
+            (dolist (signed '(t nil))
+              (dolist (width '(8 16 32 64))
+                (let ((suffix (format nil "~:[u~;i~]~D" signed width)))
+                  (add generic
+                       (format nil "~A-primitive-~A"
+                               (cond ((string= operator "+") "%+")
+                                     ((string= operator "-") "%-")
+                                     ((string= operator "*") "%*")
+                                     ((string= operator "/") "%/")
+                                     ((string= operator "==") "%=")
+                                     ((string= operator "!=") "%/=")
+                                     (t (format nil "%~A" operator)))
+                               suffix)))))
+            (when (member operator '("+" "-" "*" "/" "==" "!=" "<" "<=" ">" ">=")
+                          :test #'string=)
+              (dolist (width '(32 64))
+                (let ((suffix (format nil "f~D" width)))
+                  (add generic
+                       (format nil "~A-primitive-~A"
+                               (cond ((string= operator "+") "%+")
+                                     ((string= operator "-") "%-")
+                                     ((string= operator "*") "%*")
+                                     ((string= operator "/") "%/")
+                                     ((string= operator "==") "%=")
+                                     ((string= operator "!=") "%/=")
+                                     (t (format nil "%~A" operator)))
+                               suffix))))))))
       scope)))
 
 (defun resolve-name (scope syntax)
@@ -685,7 +792,46 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 	    (semantic-function-declaration-parameters semantic-declaration) parameters
 	    (semantic-function-declaration-return-type-reference semantic-declaration)
 	    (resolve-type-syntax module-scope
-				 (function-declaration-return-type declaration))))))
+			 (function-declaration-return-type declaration))))))
+
+(defun resolve-generic-implementation-signature (program semantic-implementation)
+  (let* ((declaration (semantic-declaration-source-declaration semantic-implementation))
+         (module-scope (semantic-program-module-scope program))
+         (target (semantic-scope-lookup module-scope
+                                        (implementation-declaration-generic-name declaration))))
+    (unless (typep target 'generic-binding)
+      (error 'semantic-error :syntax (declaration-source declaration)
+             :message "implementation target is not a generic"))
+    (let* ((generic (generic-binding-generic target))
+           (parameters-syntax (implementation-declaration-parameters declaration)))
+      (unless (termis-list-p (syntax-datum parameters-syntax))
+        (error 'semantic-error :syntax parameters-syntax
+               :message "implementation parameters must be a list"))
+      (let ((parameter-syntaxes (termis-list-elements (syntax-datum parameters-syntax))))
+        (unless (= (length parameter-syntaxes) (generic-arity generic))
+          (error 'generic-arity-mismatch-error :syntax parameters-syntax
+                 :generic generic :actual (length parameter-syntaxes)))
+        (let ((scope (semantic-scope-child module-scope))
+              (parameters (mapcar (lambda (syntax) (parse-parameter declaration syntax))
+                                  parameter-syntaxes)))
+          (dolist (parameter parameters)
+            (setf (parameter-binding-type-reference parameter)
+                  (resolve-type-syntax module-scope
+                                       (parameter-binding-type-syntax parameter))))
+          (dolist (parameter parameters)
+            (multiple-value-bind (existing foundp)
+                (semantic-scope-local-find scope (semantic-binding-name parameter))
+              (when foundp
+                (error 'duplicate-local-binding-error :syntax (parameter-binding-syntax parameter)
+                       :name (semantic-binding-name parameter) :existing existing))
+              (semantic-scope-bind scope (semantic-binding-name parameter) parameter)))
+          (setf (slot-value semantic-implementation 'generic) generic
+                (semantic-generic-implementation-scope semantic-implementation) scope
+                (semantic-scope-function scope) semantic-implementation
+                (generic-implementation-parameters semantic-implementation) parameters
+                (semantic-generic-implementation-return-type-reference semantic-implementation)
+                (resolve-type-syntax module-scope
+                                     (implementation-declaration-return-type declaration))))))))
 
 (defun make-semantic-declaration (declaration)
   (cond ((typep declaration 'type-declaration)
@@ -696,6 +842,16 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 	 (make-instance 'semantic-variable-declaration :source-declaration declaration))
 	((typep declaration 'function-declaration)
 	 (make-instance 'semantic-function-declaration :source-declaration declaration))
+	((typep declaration 'generic-declaration)
+         (let ((generic (make-instance 'generic :declaration declaration
+                                        :name (declaration-name declaration)
+                                        :arity (generic-declaration-arity declaration))))
+           (make-instance 'semantic-generic-declaration :source-declaration declaration
+                          :generic generic)))
+	((typep declaration 'implementation-declaration)
+         (make-instance 'semantic-generic-implementation :source-declaration declaration
+                        :declaration declaration :source (declaration-source declaration)
+                        :name (declaration-name declaration)))
 	;; Macro declarations have already been handled by the evaluator.
 	((typep declaration 'macro-declaration) nil)
 	(t (error "Unknown Termis declaration ~S" declaration))))
@@ -705,6 +861,8 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 	(scope (semantic-program-module-scope program)))
     (cond ((typep semantic-declaration 'semantic-function-declaration)
 	   (resolve-function-signature program semantic-declaration))
+	  ((typep semantic-declaration 'semantic-generic-implementation)
+           (resolve-generic-implementation-signature program semantic-declaration))
 	  ((typep semantic-declaration 'semantic-constant-declaration)
 	   (setf (semantic-constant-declaration-type-reference semantic-declaration)
 		 (resolve-type-syntax scope (constant-declaration-type declaration))))
@@ -875,6 +1033,25 @@ semantic representation."
 	       (type-context-function-type
 		context parameter-types
 		(semantic-function-declaration-return-type semantic-declaration)))))
+      ((typep semantic-declaration 'semantic-generic-implementation)
+       (let ((parameter-types
+               (mapcar (lambda (parameter)
+                         (setf (parameter-binding-type parameter)
+                               (resolve-type context
+                                             (parameter-binding-type-reference parameter))))
+                       (generic-implementation-parameters semantic-declaration))))
+         (setf (generic-implementation-parameter-types semantic-declaration) parameter-types
+               (generic-implementation-result-type semantic-declaration)
+               (resolve-type context
+                             (semantic-generic-implementation-return-type-reference
+                              semantic-declaration))
+               (semantic-generic-implementation-type semantic-declaration)
+               (type-context-function-type context parameter-types
+                                           (generic-implementation-result-type semantic-declaration)))
+         (generic-add-implementation (generic-implementation-generic semantic-declaration)
+                                     semantic-declaration
+                                     (declaration-source
+                                      (semantic-declaration-source-declaration semantic-declaration)))))
       ((typep semantic-declaration 'semantic-constant-declaration)
        (setf (semantic-constant-declaration-type semantic-declaration)
 	     (resolve-type context
@@ -938,6 +1115,29 @@ type checker."
    (actual :initarg :actual :reader wrong-argument-count-error-actual))
   (:default-initargs :message "wrong argument count"))
 
+(define-condition generic-arity-mismatch-error (semantic-error)
+  ((generic :initarg :generic :reader generic-arity-mismatch-error-generic)
+   (actual :initarg :actual :reader generic-arity-mismatch-error-actual))
+  (:default-initargs :message "GenericArityMismatch"))
+
+(define-condition duplicate-generic-implementation-error (semantic-error)
+  ((generic :initarg :generic :reader duplicate-generic-implementation-error-generic)
+   (parameter-types :initarg :parameter-types
+                    :reader duplicate-generic-implementation-error-parameter-types)
+   (original :initarg :original :reader duplicate-generic-implementation-error-original)
+   (duplicate :initarg :duplicate :reader duplicate-generic-implementation-error-duplicate)
+   (original-source :initarg :original-source
+                    :reader duplicate-generic-implementation-error-original-source)
+   (duplicate-source :initarg :duplicate-source
+                     :reader duplicate-generic-implementation-error-duplicate-source))
+  (:default-initargs :message "DuplicateGenericImplementation"))
+
+(define-condition no-generic-implementation-error (semantic-error)
+  ((generic :initarg :generic :reader no-generic-implementation-error-generic)
+   (argument-types :initarg :argument-types
+                   :reader no-generic-implementation-error-argument-types))
+  (:default-initargs :message "NoGenericImplementation"))
+
 (define-condition not-addressable-error (semantic-error) ())
 (define-condition not-writable-error (semantic-error) ())
 (define-condition invalid-expression-error (semantic-error) ())
@@ -981,6 +1181,9 @@ type checker."
 	((typep binding 'let-binding) (let-binding-type binding))
 	((typep binding 'primitive-binding)
 	 (builtin-intrinsic-binding-type binding))
+	((typep binding 'generic-binding)
+         (error 'invalid-expression-error :syntax syntax
+                :message "a generic is only callable in call position"))
 	((or (typep binding 'builtin-type-binding)
 	     (typep binding 'type-declaration))
 	 (error 'invalid-expression-error :syntax syntax
@@ -1065,6 +1268,43 @@ they represent parameter storage rather than C's accidental value category."
     (when (typep product-type 'product-type)
       (return-from infer-call-expression
         (infer-construct-expression syntax scope product-type (rest elements))))
+    ;; Generics are resolved here, after arguments have concrete semantic
+    ;; types, and are immediately replaced by a primitive or ordinary call.
+    (when (termis-name-p (syntax-datum (first elements)))
+      (multiple-value-bind (head-binding foundp)
+          (semantic-scope-find scope (syntax-datum (first elements)))
+        (when (and foundp (typep head-binding 'generic-binding))
+          (return-from infer-call-expression
+            (let* ((generic (generic-binding-generic head-binding))
+                 (argument-syntax (rest elements)))
+            (unless (= (length argument-syntax) (generic-arity generic))
+              (error 'wrong-argument-count-error :syntax syntax
+                     :expected (generic-arity generic) :actual (length argument-syntax)))
+            (let* ((arguments (mapcar (lambda (argument)
+                                        (infer-value-expression argument scope))
+                                      argument-syntax))
+                   (argument-types (mapcar #'expression-type arguments))
+                   (implementation (generic-find-implementation generic argument-types)))
+              (unless implementation
+                (error 'no-generic-implementation-error :syntax syntax
+                       :generic generic :argument-types argument-types))
+              (let ((operation (generic-implementation-primitive-operation implementation)))
+                (if operation
+                    (make-instance 'primitive-call :syntax syntax
+                                   :callee (make-instance 'semantic-reference
+                                                          :syntax (first elements)
+                                                          :name (generic-name generic)
+                                                          :binding head-binding)
+                                   :arguments arguments :operation operation
+                                   :type (generic-implementation-result-type implementation))
+                    (let ((callee (make-instance 'semantic-reference
+                                                 :syntax (first elements)
+                                                 :name (generic-name generic)
+                                                 :binding implementation
+                                                 :type (semantic-generic-implementation-type implementation))))
+                      (make-instance 'semantic-call :syntax syntax :callee callee
+                                     :arguments arguments
+                                     :type (generic-implementation-result-type implementation)))))))))))
     (let* ((callee (infer-expression (first elements) scope))
 	 (callee-type (expression-type callee)))
     (unless (typep callee-type 'function-type)
@@ -1380,7 +1620,9 @@ therefore visible, while the binding being built cannot see itself."
       (error 'invalid-expression-error :syntax syntax :message "return requires exactly one value"))
     (make-instance 'return-expression :syntax syntax
 		   :value (check-expression (first arguments) scope
-					    (semantic-function-declaration-return-type function))
+				    (if (typep function 'semantic-generic-implementation)
+                                        (generic-implementation-result-type function)
+                                        (semantic-function-declaration-return-type function)))
 		   :type (type-context-never-type (semantic-scope-owning-type-context scope)))))
 
 (defun infer-address-expression (syntax scope)
@@ -1802,6 +2044,29 @@ the primitive model."
 				  (semantic-function-declaration-return-type declaration)))
 		   (backend-validation-fail (semantic-function-declaration-body declaration)
 					    "function result is not exactly typed"))))
+	      ((typep declaration 'semantic-generic-declaration)
+               (let ((generic (semantic-generic-declaration-generic declaration)))
+                 (unless (and (typep generic 'generic)
+                              (= (generic-arity generic)
+                                 (generic-declaration-arity
+                                  (semantic-declaration-source-declaration declaration))))
+                   (backend-validation-fail nil "generic declaration is incomplete"))))
+	      ((typep declaration 'semantic-generic-implementation)
+               (let ((type (semantic-generic-implementation-type declaration))
+                     (body (generic-implementation-body declaration)))
+                 (unless (and (typep type 'function-type)
+                              (= (length (generic-implementation-parameters declaration))
+                                 (generic-arity (generic-implementation-generic declaration)))
+                              (equal (function-type-parameters type)
+                                     (generic-implementation-parameter-types declaration))
+                              (same-type-p (function-type-result type)
+                                           (generic-implementation-result-type declaration)))
+                   (backend-validation-fail nil "generic implementation signature is incomplete"))
+                 (validate-expression-for-backend body)
+                 (unless (or (typep (expression-type body) 'never-type)
+                             (same-type-p (expression-type body)
+                                          (generic-implementation-result-type declaration)))
+                   (backend-validation-fail body "generic implementation result is not exactly typed"))))
 	      ((typep declaration 'semantic-type-declaration)
 	       (let ((type (semantic-type-declaration-type declaration)))
 		 (unless (and (typep type '(or product-type sum-type))
@@ -1851,6 +2116,12 @@ the primitive model."
 		  (function-declaration-body declaration)
 		  (semantic-function-declaration-scope semantic-declaration)
 		  (semantic-function-declaration-return-type semantic-declaration))))
+	  ((typep semantic-declaration 'semantic-generic-implementation)
+           (setf (generic-implementation-body semantic-declaration)
+                 (check-expression
+                  (implementation-declaration-body declaration)
+                  (semantic-generic-implementation-scope semantic-declaration)
+                  (generic-implementation-result-type semantic-declaration))))
 	  ((typep semantic-declaration 'semantic-constant-declaration)
 	   (setf (semantic-constant-declaration-initializer semantic-declaration)
 		 (check-expression
@@ -1878,14 +2149,26 @@ Thus ordinary declaration order has no effect on name visibility."
 						   :module-scope module-scope
 						   :type-context type-context)))
     (setf (semantic-scope-program bootstrap) program)
+    ;; Establish every semantic identity before publishing runtime names.
+    ;; Implementations deliberately do not occupy the module namespace.
     (dolist (declaration (unit-declarations unit))
       (unless (typep declaration 'macro-declaration)
-	(semantic-scope-bind module-scope (declaration-name declaration) declaration)
-	(let ((semantic-declaration (make-semantic-declaration declaration)))
-	  (push (cons declaration semantic-declaration)
-		(semantic-program-declarations program)))))
+        (let ((semantic-declaration (make-semantic-declaration declaration)))
+          (push (cons declaration semantic-declaration)
+                (semantic-program-declarations program)))))
     (setf (semantic-program-declarations program)
 	  (nreverse (semantic-program-declarations program)))
+    (dolist (entry (semantic-program-declarations program))
+      (let* ((declaration (car entry))
+             (semantic-declaration (cdr entry)))
+        (cond ((typep semantic-declaration 'semantic-generic-declaration)
+               (let ((generic (semantic-generic-declaration-generic semantic-declaration)))
+                 (semantic-scope-bind module-scope (declaration-name declaration)
+                                      (make-instance 'generic-binding
+                                                     :name (declaration-name declaration)
+                                                     :generic generic))))
+              ((not (typep declaration 'implementation-declaration))
+               (semantic-scope-bind module-scope (declaration-name declaration) declaration)))))
     (dolist (entry (semantic-program-declarations program))
       (resolve-declaration-signature program (cdr entry)))
     (resolve-types program)

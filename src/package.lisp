@@ -99,6 +99,14 @@
    #:variable-declaration
    #:variable-declaration-type
    #:variable-declaration-initializer
+   #:generic-declaration
+   #:generic-declaration-parameters
+   #:generic-declaration-arity
+   #:implementation-declaration
+   #:implementation-declaration-generic-name
+   #:implementation-declaration-parameters
+   #:implementation-declaration-return-type
+   #:implementation-declaration-body
    #:semantic-scope
    #:make-semantic-scope
    #:semantic-scope-parent
@@ -152,6 +160,28 @@
    #:semantic-function-declaration-return-type
    #:semantic-function-declaration-type
    #:semantic-function-declaration-body
+   #:semantic-generic-declaration
+   #:semantic-generic-declaration-generic
+   #:semantic-generic-implementation
+   #:semantic-generic-implementation-scope
+   #:semantic-generic-implementation-return-type-reference
+   #:semantic-generic-implementation-type
+   #:generic
+   #:generic-declaration
+   #:generic-name
+   #:generic-arity
+   #:generic-implementations
+   #:generic-binding
+   #:generic-binding-generic
+   #:generic-implementation
+   #:generic-implementation-declaration
+   #:generic-implementation-generic
+   #:generic-implementation-parameters
+   #:generic-implementation-parameter-types
+   #:generic-implementation-result-type
+   #:generic-implementation-body
+   #:generic-implementation-primitive-operation
+   #:generic-find-implementation
    #:semantic-expression
    #:semantic-expression-syntax
    #:semantic-expression-type
@@ -315,6 +345,19 @@
    #:type-mismatch-error
    #:type-mismatch-error-actual
    #:type-mismatch-error-expected
+   #:generic-arity-mismatch-error
+   #:generic-arity-mismatch-error-generic
+   #:generic-arity-mismatch-error-actual
+   #:duplicate-generic-implementation-error
+   #:duplicate-generic-implementation-error-generic
+   #:duplicate-generic-implementation-error-parameter-types
+   #:duplicate-generic-implementation-error-original
+   #:duplicate-generic-implementation-error-duplicate
+   #:duplicate-generic-implementation-error-original-source
+   #:duplicate-generic-implementation-error-duplicate-source
+   #:no-generic-implementation-error
+   #:no-generic-implementation-error-generic
+   #:no-generic-implementation-error-argument-types
    #:semantic-not-callable-error
    #:wrong-argument-count-error
    #:wrong-argument-count-error-expected
@@ -343,6 +386,7 @@
    #:backend-validation-error
    #:validate-for-backend
    #:backend-representable-type-p
+   #:termis-type-name
    #:build-semantic-expression
    #:resolve-compilation-unit
    #:definition-form-p

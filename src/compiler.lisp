@@ -70,6 +70,16 @@
   ((type :initarg :type :reader variable-declaration-type)
    (initializer :initarg :initializer :reader variable-declaration-initializer)))
 
+(defclass generic-declaration (declaration)
+  ((parameters :initarg :parameters :reader generic-declaration-parameters)
+   (arity :initarg :arity :reader generic-declaration-arity)))
+
+(defclass implementation-declaration (declaration)
+  ((generic-name :initarg :generic-name :reader implementation-declaration-generic-name)
+   (parameters :initarg :parameters :reader implementation-declaration-parameters)
+   (return-type :initarg :return-type :reader implementation-declaration-return-type)
+   (body :initarg :body :reader implementation-declaration-body)))
+
 (define-condition definition-error (error)
   ((syntax :initarg :syntax :reader definition-error-syntax)
    (message :initarg :message :reader definition-error-message))
@@ -112,7 +122,7 @@ result object avoids treating an ordinary list expression as several forms."
   (definitions '() :type list))
 
 (defparameter +definition-form-names+
-  '("%type" "%function" "%macro" "%constant" "%variable"))
+  '("%type" "%function" "%macro" "%constant" "%variable" "%generic" "%implementation"))
 
 (defun definition-head-name (syntax)
   "Return SYNTAX's definition-form name, or NIL when it is not one."
@@ -170,6 +180,13 @@ unambiguous."
   (compilation-unit-declarations unit))
 
 (defun register-declaration (unit declaration)
+  ;; Implementations belong to a generic's implementation table, not the
+  ;; module's single name namespace.  Their declaration name is retained for
+  ;; diagnostics only.
+  (when (typep declaration 'implementation-declaration)
+    (setf (compilation-unit-declarations unit)
+          (append (compilation-unit-declarations unit) (list declaration)))
+    (return-from register-declaration declaration))
   (let ((name (declaration-name declaration)))
     (multiple-value-bind (existing foundp) (find-declaration unit name)
       (when foundp
@@ -192,6 +209,17 @@ unambiguous."
             (let ((name (syntax-datum parameter)))
               (unless (termis-name-p name)
                 (definition-fail definition "%macro parameters must be Termis names"))
+              name))
+          (termis-list-elements (syntax-datum parameters))))
+
+(defun generic-parameter-names (definition parameters)
+  "Extract the untyped parameter names that establish a generic's arity."
+  (unless (termis-list-p (syntax-datum parameters))
+    (definition-fail definition "%generic parameters must be a list"))
+  (mapcar (lambda (parameter)
+            (let ((name (syntax-datum parameter)))
+              (unless (termis-name-p name)
+                (definition-fail definition "%generic parameters must be Termis names"))
               name))
           (termis-list-elements (syntax-datum parameters))))
 
@@ -279,7 +307,25 @@ expands syntax; this processor is the boundary that creates compiler objects."
                  (definition-fail expanded-syntax "%variable requires a name, type, and initializer"))
                (make-declaration 'variable-declaration
                                  (definition-name expanded-syntax (first arguments))
-                                 :type (second arguments) :initializer (third arguments))))))))
+                                 :type (second arguments) :initializer (third arguments))))
+            ((string= head "%generic")
+             (let ((arguments (definition-elements expanded-syntax "generic" 2)))
+               (unless (= (length arguments) 2)
+                 (definition-fail expanded-syntax "%generic requires a name and parameter list"))
+               (let* ((name (definition-name expanded-syntax (first arguments)))
+                      (parameters (second arguments))
+                      (names (generic-parameter-names expanded-syntax parameters)))
+                 (make-declaration 'generic-declaration name
+                                   :parameters names :arity (length names)))))
+            ((string= head "%implementation")
+             (let ((arguments (definition-elements expanded-syntax "implementation" 4)))
+               (unless (= (length arguments) 4)
+                 (definition-fail expanded-syntax "%implementation requires a generic name, parameters, return type, and body"))
+               (make-declaration 'implementation-declaration
+                                 (definition-name expanded-syntax (first arguments))
+                                 :generic-name (definition-name expanded-syntax (first arguments))
+                                 :parameters (second arguments) :return-type (third arguments)
+                                 :body (fourth arguments))))))))
 
 (defun expand-top-level (syntax environment)
   "Expand SYNTAX into a TOP-LEVEL-EXPANSION-RESULT.
