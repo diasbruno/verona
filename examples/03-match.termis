@@ -1,0 +1,7 @@
+(function maximum ((left i64) (right i64)) i64
+  (match (> left right)
+    (true left)
+    (false right)))
+
+(function main () i64
+  (maximum 20 42))

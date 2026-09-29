@@ -1,0 +1,13 @@
+(generic combine (left right))
+
+(implementation combine ((left i64) (right i64)) i64
+  (+ left right))
+
+(function twenty () i64
+  20)
+
+(function twenty-two () i64
+  22)
+
+(function main () i64
+  (combine (twenty) (twenty-two)))

@@ -1,0 +1,5 @@
+(function add ((left i64) (right i64)) i64
+  (+ left right))
+
+(function main () i64
+  (add 20 22))

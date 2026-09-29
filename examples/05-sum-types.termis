@@ -1,0 +1,9 @@
+(type option (sum (none) (some i64)))
+
+(function unwrap ((value option)) i64
+  (match value
+    ((none) 0)
+    ((some number) number)))
+
+(function main () i64
+  (unwrap (some 42)))

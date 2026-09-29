@@ -50,9 +50,18 @@ Enter the Nix shell, then run:
 make test
 ```
 
-The active tests use FiveAM. The pre-foundation C++ test sources and all Termis
-examples remain in the repository as historical input material for future
-compiler stages.
+The active tests use FiveAM. The pre-foundation C++ test sources remain in the
+repository as historical input material. The Termis programs in
+[`examples/`](examples/) use the current front-end syntax and are compiled by
+the active test suite.
+
+## Examples
+
+[`examples/`](examples/) contains small, self-contained programs covering the
+features implemented today. See [the examples guide](examples/README.md) for
+the feature covered by each program. Modules, imports, the standard library,
+and C FFI are not yet part of this set because they are not currently supported
+by the front end.
 
 ## Roadmap
 

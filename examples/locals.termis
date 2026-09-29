@@ -1,9 +1,0 @@
-(fn main
-  ((params ())
-   (return i64)
-   (requires ()))
-  (let ((x 40)
-        (y 2))
-    (do
-      unit
-      (+ x y))))

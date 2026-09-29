@@ -1,0 +1,7 @@
+(type point ((x i64) (y i64)))
+
+(function make-point ((x i64) (y i64)) point
+  (point x y))
+
+(function main () i64
+  (field (make-point 20 42) y))
