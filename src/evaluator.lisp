@@ -186,6 +186,7 @@ does not inspect, evaluate, or otherwise interpret declaration contents."
     ;; vocabulary belongs to this Termis-level environment instead.
     (dolist (definition '( ("type" . "%type")
                            ("function" . "%function")
+                           ("external-function" . "%external-function")
                            ("macro" . "%macro")
                            ("constant" . "%constant")
                            ("variable" . "%variable")

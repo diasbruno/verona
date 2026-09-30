@@ -98,6 +98,51 @@
 (def-suite :termis)
 (in-suite :termis)
 
+(test models-c-external-declarations-and-void-pointers
+  (let* ((source
+           "(external-function allocate \"malloc\" (usize) (pointer void))
+             (function main () i32
+               (let ((memory (pointer void) (allocate 1)))
+                 (let ((buffer (pointer u8) (cast (pointer u8) memory))) 0)))")
+         (unit (compile-string (make-compiler) source))
+         (declaration (first (unit-declarations unit)))
+         (program (compilation-unit-semantic-program unit))
+         (semantic (semantic-program-declaration program declaration))
+         (context (semantic-program-type-context program)))
+    (is (typep declaration 'termis:external-function-declaration))
+    (is (string= "malloc"
+                 (termis:external-function-declaration-external-name declaration)))
+    (is (typep semantic 'termis:semantic-external-function-declaration))
+    (is (typep (termis:semantic-external-function-declaration-result-type semantic)
+               'termis:pointer-type))
+    (is (typep (termis:pointer-type-pointee
+                (termis:semantic-external-function-declaration-result-type semantic))
+               'termis:void-type))
+    (is (typep (termis:type-context-void-type context) 'termis:void-type))))
+
+(test rejects-void-pointer-dereference
+  (signals termis:invalid-expression-error
+    (compile-string
+     (make-compiler)
+     "(external-function allocate \"malloc\" (usize) (pointer void))
+       (function main () i32
+         (let ((memory (pointer void) (allocate 1)))
+           (load (deref memory))))")))
+
+(test maps-external-void-results-to-unit-at-the-call-boundary
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(external-function allocate \"malloc\" (usize) (pointer void))
+                 (external-function release \"free\" ((pointer void)) void)
+                 (function release-all () unit
+                   (let ((memory (pointer void) (allocate 1))) (release memory)))"))
+         (program (compilation-unit-semantic-program unit))
+         (function (semantic-program-declaration program (third (unit-declarations unit))))
+         (body (semantic-function-declaration-body function))
+         (call (termis:let-expression-body body)))
+    (is (typep call 'termis:external-call-expression))
+    (is (typep (termis:expression-type call) 'termis:unit-type))))
+
 (test reads-atoms
   (let ((forms (read-source (make-source "atoms.termis" "foo 42 -42 3.14 \"hello\" unit"))))
     (is (= 6 (length forms)))

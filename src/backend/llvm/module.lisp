@@ -7,6 +7,8 @@
   (dolist (declaration (semantic-declarations program))
     (cond ((typep declaration 'termis:semantic-function-declaration)
            (declare-function backend declaration))
+	  ((typep declaration 'termis:semantic-external-function-declaration)
+	   (declare-external-function backend declaration))
           ((typep declaration 'termis:semantic-generic-implementation)
            (declare-generic-implementation backend declaration))
           ((typep declaration 'termis:semantic-variable-declaration)

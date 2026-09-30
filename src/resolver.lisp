@@ -15,6 +15,7 @@
 (defclass termis-type () ())
 
 (defclass unit-type (termis-type) ())
+(defclass void-type (termis-type) ())
 (defclass never-type (termis-type) ())
 ;; UNIT-VALUE is deliberately an object rather than the host value NIL.  A
 ;; type context allocates exactly one of these objects, making the singleton
@@ -62,6 +63,7 @@
 
 (defclass type-context ()
   ((unit-type :reader type-context-unit-type)
+   (void-type :reader type-context-void-type)
    (never-type :reader type-context-never-type)
    (unit-value :reader type-context-unit-value)
    (pointer-width :initarg :pointer-width :reader type-context-pointer-width)
@@ -81,6 +83,7 @@
            pointer-width))
   (let ((context (make-instance 'type-context)))
     (setf (slot-value context 'unit-type) (make-instance 'unit-type)
+	  (slot-value context 'void-type) (make-instance 'void-type)
 	  (slot-value context 'never-type) (make-instance 'never-type)
 	  (slot-value context 'unit-value) (make-instance 'unit-value)
 	  (slot-value context 'pointer-width) pointer-width
@@ -351,6 +354,16 @@ the semantic type of a unit expression remains UnitType."
    (type :initform nil :accessor semantic-function-declaration-type)
    (body :initform nil :accessor semantic-function-declaration-body)))
 
+(defclass semantic-external-function-declaration (semantic-declaration)
+  ((external-name :initarg :external-name :reader semantic-external-function-declaration-external-name)
+   (parameter-type-references :initform '()
+                              :accessor semantic-external-function-declaration-parameter-type-references)
+   (parameter-types :initform '() :accessor semantic-external-function-declaration-parameter-types)
+   (result-type-reference :initform nil
+                          :accessor semantic-external-function-declaration-result-type-reference)
+   (result-type :initform nil :accessor semantic-external-function-declaration-result-type)
+   (type :initform nil :accessor semantic-external-function-declaration-type)))
+
 (defclass semantic-generic-declaration (semantic-declaration)
   ((generic :initarg :generic :reader semantic-generic-declaration-generic)))
 
@@ -397,11 +410,16 @@ the semantic type of a unit expression remains UnitType."
   ((callee :initarg :callee :reader semantic-call-callee)
    (arguments :initarg :arguments :reader semantic-call-arguments)))
 (defclass semantic-call (call-expression) ())
+(defclass external-call-expression (semantic-call)
+  ((external-function :initarg :external-function
+                      :reader external-call-expression-external-function)))
 (defclass primitive-call (semantic-call)
   ((operation :initarg :operation :reader primitive-call-operation)))
 ;; Conversion calls are a distinct semantic class so a backend can lower
 ;; them mechanically without inspecting primitive names or argument types.
 (defclass conversion-expression (primitive-call) ())
+(defclass pointer-cast-expression (semantic-expression)
+  ((operand :initarg :operand :reader pointer-cast-expression-operand)))
 (defclass construct-expression (semantic-expression)
   ((product-type :initarg :product-type :reader construct-expression-product-type)
    (fields :initarg :fields :reader construct-expression-fields)))
@@ -475,12 +493,17 @@ than recovered later through ad-hoc string comparisons."
 						 :type type))))
       (bind-type "bool" (type-context-boolean-type type-context))
       (bind-type "string" (type-context-string-type type-context))
+	  (bind-type "void" (type-context-void-type type-context))
       (dolist (specification '(("i8" t 8) ("i16" t 16)
 			       ("i32" t 32) ("i64" t 64)
 			       ("u8" nil 8) ("u16" nil 16)
 			       ("u32" nil 32) ("u64" nil 64)))
 	(destructuring-bind (name signed width) specification
 	  (bind-type name (type-context-integer-type type-context signed width))))
+	(bind-type "isize" (type-context-integer-type type-context t
+						     (type-context-pointer-width type-context)))
+	(bind-type "usize" (type-context-integer-type type-context nil
+						     (type-context-pointer-width type-context)))
       (dolist (specification '(("f32" 32) ("f64" 64)))
 	(destructuring-bind (name width) specification
 	  (bind-type name (type-context-float-type type-context width)))))
@@ -860,6 +883,19 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 	    (resolve-type-syntax module-scope
 			 (function-declaration-return-type declaration))))))
 
+(defun resolve-external-function-signature (program semantic-declaration)
+  "Resolve an external declaration with ordinary Termis types only."
+  (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
+         (module-scope (semantic-program-module-scope-for program
+                                                            (declaration-module declaration)))
+         (parameter-syntax (external-function-declaration-parameter-types declaration)))
+    (setf (semantic-external-function-declaration-parameter-type-references semantic-declaration)
+          (mapcar (lambda (syntax) (resolve-type-syntax module-scope syntax))
+                  (termis-list-elements (syntax-datum parameter-syntax)))
+          (semantic-external-function-declaration-result-type-reference semantic-declaration)
+          (resolve-type-syntax module-scope
+                               (external-function-declaration-result-type declaration)))))
+
 (defun resolve-generic-implementation-signature (program semantic-implementation)
   (let* ((declaration (semantic-declaration-source-declaration semantic-implementation))
          (module-scope (semantic-program-module-scope-for program (declaration-module declaration)))
@@ -915,6 +951,10 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 	 (make-instance 'semantic-variable-declaration :source-declaration declaration))
 	((typep declaration 'function-declaration)
 	 (make-instance 'semantic-function-declaration :source-declaration declaration))
+	((typep declaration 'external-function-declaration)
+	 (make-instance 'semantic-external-function-declaration
+                        :source-declaration declaration
+                        :external-name (external-function-declaration-external-name declaration)))
 	((typep declaration 'generic-declaration)
          (let ((generic (make-instance 'generic :declaration declaration
                                         :name (declaration-name declaration)
@@ -934,6 +974,8 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 	(scope (semantic-program-module-scope-for program (declaration-module declaration))))
     (cond ((typep semantic-declaration 'semantic-function-declaration)
 	   (resolve-function-signature program semantic-declaration))
+	  ((typep semantic-declaration 'semantic-external-function-declaration)
+	   (resolve-external-function-signature program semantic-declaration))
 	  ((typep semantic-declaration 'semantic-generic-implementation)
            (resolve-generic-implementation-signature program semantic-declaration))
 	  ((typep semantic-declaration 'semantic-constant-declaration)
@@ -1106,6 +1148,22 @@ semantic representation."
 	       (type-context-function-type
 		context parameter-types
 		(semantic-function-declaration-return-type semantic-declaration)))))
+	  ((typep semantic-declaration 'semantic-external-function-declaration)
+	   (let ((parameter-types
+		   (mapcar (lambda (reference) (resolve-type context reference))
+			   (semantic-external-function-declaration-parameter-type-references
+			    semantic-declaration)))
+	     (result-type
+	       (resolve-type context
+			     (semantic-external-function-declaration-result-type-reference
+			      semantic-declaration))))
+	     (setf (semantic-external-function-declaration-parameter-types semantic-declaration)
+		   parameter-types
+		   (semantic-external-function-declaration-result-type semantic-declaration)
+		   result-type
+		   (semantic-external-function-declaration-type semantic-declaration)
+		   (type-context-function-type context parameter-types result-type))
+	     (validate-external-function-signature semantic-declaration)))
       ((typep semantic-declaration 'semantic-generic-implementation)
        (let ((parameter-types
                (mapcar (lambda (parameter)
@@ -1219,6 +1277,7 @@ type checker."
   "A compact stable spelling used in semantic diagnostics."
   (cond ((typep type 'never-type) "never")
 	((typep type 'unit-type) "unit")
+	((typep type 'void-type) "void")
 	((typep type 'boolean-type) "bool")
 	((typep type 'string-type) "string")
 	((typep type 'integer-type)
@@ -1235,6 +1294,30 @@ type checker."
 (defun same-type-p (left right)
   "Whether LEFT and RIGHT are the same canonical Termis type."
   (eq left right))
+
+(defun c-abi-value-type-p (type)
+  "Whether TYPE is passed or returned as a first-stage C ABI value."
+  (or (typep type 'integer-type)
+      (typep type 'float-type)
+      (typep type 'pointer-type)))
+
+(defun validate-external-function-signature (declaration)
+  "Reject unsupported C ABI shapes before backend lowering."
+  (unless (every #'c-abi-value-type-p
+                 (semantic-external-function-declaration-parameter-types declaration))
+    (error 'semantic-error
+           :syntax (declaration-source
+                    (semantic-declaration-source-declaration declaration))
+           :message "external function parameters must use C ABI value types"))
+  (unless (or (typep (semantic-external-function-declaration-result-type declaration)
+                     'void-type)
+              (c-abi-value-type-p
+               (semantic-external-function-declaration-result-type declaration)))
+    (error 'semantic-error
+           :syntax (declaration-source
+                    (semantic-declaration-source-declaration declaration))
+           :message "external function result must use a C ABI value type or void"))
+  declaration)
 
 (defun compatible-p (actual expected)
   "Current non-literal compatibility rule: types must be identical."
@@ -1270,6 +1353,8 @@ type checker."
 		  (semantic-variable-declaration-type semantic))
 		 ((typep semantic 'semantic-function-declaration)
 		  (semantic-function-declaration-type semantic))
+		 ((typep semantic 'semantic-external-function-declaration)
+		  (semantic-external-function-declaration-type semantic))
 		 (t (error 'invalid-expression-error :syntax syntax
 						     :message "declaration has no runtime type")))))
 	(t (error 'invalid-expression-error :syntax syntax
@@ -1403,8 +1488,19 @@ they represent parameter storage rather than C's accidental value category."
 	      (make-instance (if conversion-p 'conversion-expression 'primitive-call)
 			     :syntax syntax :callee callee :arguments arguments
 			     :operation operation :type (function-type-result callee-type)))
-	    (make-instance 'semantic-call :syntax syntax :callee callee
-			   :arguments arguments :type (function-type-result callee-type)))))))))
+	    (let ((external (and (typep binding 'external-function-declaration)
+				 (semantic-program-declaration
+				  (semantic-scope-owning-program scope) binding))))
+	      (if (typep external 'semantic-external-function-declaration)
+		  ;; C void has no Termis value.  Only this external call boundary
+		  ;; materializes the ordinary Termis unit value.
+		  (make-instance 'external-call-expression :syntax syntax :callee callee
+				 :arguments arguments :external-function external
+				 :type (if (typep (function-type-result callee-type) 'void-type)
+					  (type-context-unit-type (semantic-scope-owning-type-context scope))
+					  (function-type-result callee-type)))
+		  (make-instance 'semantic-call :syntax syntax :callee callee
+				 :arguments arguments :type (function-type-result callee-type)))))))))))
 
 (defun infer-field-expression (syntax scope)
   (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
@@ -1722,9 +1818,29 @@ therefore visible, while the binding being built cannot see itself."
       (unless (typep operand-type 'pointer-type)
 	(error 'invalid-expression-error :syntax (first arguments)
 					 :message "dereference requires a pointer"))
+      (when (typep (pointer-type-pointee operand-type) 'void-type)
+	(error 'invalid-expression-error :syntax (first arguments)
+					 :message "cannot dereference (pointer void)"))
       (make-instance 'dereference-expression :syntax syntax :operand operand
 					     :type (pointer-type-target operand-type)
 			     :addressable t :writable t))))
+
+(defun infer-pointer-cast-expression (syntax scope)
+  "Apply the only initial pointer conversion: T* <-> void*."
+  (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
+    (unless (= (length arguments) 2)
+      (error 'invalid-expression-error :syntax syntax
+             :message "cast requires a target type and one operand"))
+    (let* ((context (semantic-scope-owning-type-context scope))
+           (target (resolve-type context (resolve-type-syntax scope (first arguments))))
+           (operand (infer-value-expression (second arguments) scope))
+           (source (expression-type operand)))
+      (unless (and (typep target 'pointer-type) (typep source 'pointer-type)
+                   (or (typep (pointer-type-pointee target) 'void-type)
+                       (typep (pointer-type-pointee source) 'void-type)))
+        (error 'invalid-expression-error :syntax syntax
+               :message "cast permits only (pointer T) to or from (pointer void)"))
+      (make-instance 'pointer-cast-expression :syntax syntax :operand operand :type target))))
 
 (defun load-place-expression (syntax place)
   "Make a read from PLACE explicit in the resolved semantic program."
@@ -1824,6 +1940,8 @@ therefore visible, while the binding being built cannot see itself."
 		      (infer-dereference-expression syntax scope))
 		     ((and special (string= special "load"))
 		      (infer-load-expression syntax scope))
+		     ((and special (string= special "cast"))
+		      (infer-pointer-cast-expression syntax scope))
 		     (t (infer-call-expression syntax scope))))))
 	  (t (error 'invalid-expression-error :syntax syntax
 					      :message "unsupported expression")))))
@@ -1879,7 +1997,8 @@ the primitive model."
   (cond ((or (typep type 'unit-type) (typep type 'boolean-type)) t)
 	((typep type 'integer-type) (member (integer-type-width type) '(8 16 32 64)))
 	((typep type 'float-type) (member (float-type-width type) '(32 64)))
-	((typep type 'pointer-type) (backend-representable-type-p (pointer-type-pointee type)))
+	((typep type 'pointer-type) (or (typep (pointer-type-pointee type) 'void-type)
+				   (backend-representable-type-p (pointer-type-pointee type))))
 	((typep type 'function-type)
 	 (and (every #'backend-representable-type-p (function-type-parameters type))
 	      (backend-representable-type-p (function-type-result type))))
@@ -1912,7 +2031,12 @@ the primitive model."
   (unless (and (typep expression 'expression) (typep (expression-type expression) 'termis-type))
     (backend-validation-fail expression "expression is missing a resolved semantic type"))
   (unless (or (typep (expression-type expression) 'never-type)
-	      (backend-representable-type-p (expression-type expression)))
+	      (backend-representable-type-p (expression-type expression))
+	      ;; An external function with a void result is callable but is not a
+	      ;; Termis value type.  Its call node supplies unit at the boundary.
+	      (and (typep expression 'semantic-reference)
+		   (typep (semantic-reference-binding expression)
+			  'external-function-declaration)))
     (backend-validation-fail expression "expression type ~A is not backend representable"
 			     (termis-type-name (expression-type expression))))
   (cond
@@ -2032,9 +2156,20 @@ the primitive model."
     ((typep expression 'dereference-expression)
      (validate-expression-for-backend (dereference-expression-operand expression))
      (unless (and (typep (expression-type (dereference-expression-operand expression)) 'pointer-type)
+		  (not (typep (pointer-type-pointee
+			       (expression-type (dereference-expression-operand expression)))
+			      'void-type))
 		  (same-type-p (expression-type expression)
 		       (pointer-type-pointee (expression-type (dereference-expression-operand expression)))))
 	(backend-validation-fail expression "dereference is not fully typed")))
+    ((typep expression 'pointer-cast-expression)
+     (validate-expression-for-backend (pointer-cast-expression-operand expression))
+     (unless (and (typep (expression-type expression) 'pointer-type)
+		  (typep (expression-type (pointer-cast-expression-operand expression)) 'pointer-type)
+		  (or (typep (pointer-type-pointee (expression-type expression)) 'void-type)
+		      (typep (pointer-type-pointee
+			      (expression-type (pointer-cast-expression-operand expression))) 'void-type)))
+	(backend-validation-fail expression "pointer cast is not a void pointer conversion")))
     ((typep expression 'store-expression)
      (validate-expression-for-backend (assignment-expression-target expression))
      (validate-expression-for-backend (assignment-expression-value expression))
@@ -2067,6 +2202,28 @@ the primitive model."
 		  (backend-validation-fail expression "primitive call has a non-exact argument type")))
        (unless (same-type-p (expression-type expression) (primitive-operation-result-type operation))
 	 (backend-validation-fail expression "primitive call result type disagrees with its operation"))))
+    ((typep expression 'external-call-expression)
+     (validate-expression-for-backend (semantic-call-callee expression))
+     (let* ((external (external-call-expression-external-function expression))
+	    (callee-type (expression-type (semantic-call-callee expression))))
+       (unless (and (typep external 'semantic-external-function-declaration)
+		    (typep callee-type 'function-type)
+		    (eq (semantic-reference-binding (semantic-call-callee expression))
+			(semantic-declaration-source-declaration external)))
+	 (backend-validation-fail expression "external call has no resolved external declaration"))
+       (loop for argument in (semantic-call-arguments expression)
+	     for parameter in (function-type-parameters callee-type)
+	     do (validate-expression-for-backend argument)
+		(unless (same-type-p (expression-type argument) parameter)
+		  (backend-validation-fail expression "external call has a non-exact argument type")))
+       (unless (= (length (semantic-call-arguments expression))
+		  (length (function-type-parameters callee-type)))
+	 (backend-validation-fail expression "external call has an invalid argument count"))
+       (unless (if (typep (function-type-result callee-type) 'void-type)
+		   (typep (expression-type expression) 'unit-type)
+		   (same-type-p (expression-type expression)
+				(function-type-result callee-type)))
+	 (backend-validation-fail expression "external call result has the wrong Termis type"))))
     ((typep expression 'semantic-call)
      (validate-expression-for-backend (semantic-call-callee expression))
      (let ((callee-type (expression-type (semantic-call-callee expression))))
@@ -2117,6 +2274,15 @@ the primitive model."
 				  (semantic-function-declaration-return-type declaration)))
 		   (backend-validation-fail (semantic-function-declaration-body declaration)
 					    "function result is not exactly typed"))))
+	      ((typep declaration 'semantic-external-function-declaration)
+	       (let ((type (semantic-external-function-declaration-type declaration)))
+		 (unless (and (typep type 'function-type)
+			      (equal (function-type-parameters type)
+				     (semantic-external-function-declaration-parameter-types declaration))
+			      (same-type-p (function-type-result type)
+				   (semantic-external-function-declaration-result-type declaration)))
+		   (backend-validation-fail nil "external function signature is incomplete"))
+		 (validate-external-function-signature declaration)))
 	      ((typep declaration 'semantic-generic-declaration)
                (let ((generic (semantic-generic-declaration-generic declaration)))
                  (unless (and (typep generic 'generic)

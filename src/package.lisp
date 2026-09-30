@@ -118,6 +118,10 @@
    #:function-declaration-parameters
    #:function-declaration-return-type
    #:function-declaration-body
+   #:external-function-declaration
+   #:external-function-declaration-external-name
+   #:external-function-declaration-parameter-types
+   #:external-function-declaration-result-type
    #:macro-declaration
    #:macro-declaration-parameters
    #:macro-declaration-body
@@ -194,6 +198,13 @@
    #:semantic-function-declaration-return-type
    #:semantic-function-declaration-type
    #:semantic-function-declaration-body
+   #:semantic-external-function-declaration
+   #:semantic-external-function-declaration-external-name
+   #:semantic-external-function-declaration-parameter-type-references
+   #:semantic-external-function-declaration-parameter-types
+   #:semantic-external-function-declaration-result-type-reference
+   #:semantic-external-function-declaration-result-type
+   #:semantic-external-function-declaration-type
    #:semantic-generic-declaration
    #:semantic-generic-declaration-generic
    #:semantic-generic-implementation
@@ -243,10 +254,14 @@
    #:semantic-call
    #:semantic-call-callee
    #:semantic-call-arguments
+   #:external-call-expression
+   #:external-call-expression-external-function
    #:call-expression
    #:primitive-call
    #:primitive-call-operation
    #:conversion-expression
+   #:pointer-cast-expression
+   #:pointer-cast-expression-operand
    #:construct-expression
    #:construct-expression-product-type
    #:construct-expression-fields
@@ -304,6 +319,7 @@
    #:semantic-pointer-type-syntax-target
    #:termis-type
    #:unit-type
+   #:void-type
    #:never-type
    #:boolean-type
    #:string-type
@@ -340,6 +356,7 @@
    #:type-context
    #:make-type-context
    #:type-context-unit-type
+   #:type-context-void-type
    #:type-context-never-type
    #:type-context-unit-value
    #:type-context-pointer-width

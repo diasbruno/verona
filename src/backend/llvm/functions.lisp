@@ -9,6 +9,18 @@
           (backend-binding backend declaration) function)
     function))
 
+(defun declare-external-function (backend declaration)
+  "Declare a C ABI function under its explicit linker name."
+  (let* ((source (semantic-source-binding declaration))
+         (function (llvm:add-function
+                    (llvm-backend-module backend)
+                    (termis:semantic-external-function-declaration-external-name declaration)
+                    (lower-type backend
+                                (termis:semantic-external-function-declaration-type declaration)))))
+    (setf (backend-binding backend source) function
+          (backend-binding backend declaration) function)
+    function))
+
 (defun generic-implementation-llvm-name (declaration)
   "A generic has no public symbol; each selected implementation does."
   (format nil "~A_impl_~{~A~^_~}"

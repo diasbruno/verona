@@ -237,6 +237,10 @@ only job here is to form the CFG and merge non-terminating case values."
      (emit-place backend (termis:address-expression-operand expression)))
     ((typep expression 'termis:dereference-expression)
      (emit-place backend expression))
+    ((typep expression 'termis:pointer-cast-expression)
+     ;; Pointer casts involving void* change only the Termis semantic type;
+     ;; LLVM opaque pointers require no generated conversion instruction.
+     (emit-value backend (termis:pointer-cast-expression-operand expression)))
     ((typep expression 'termis:store-expression)
      (llvm:build-store (llvm-backend-builder backend)
                        (emit-value backend (termis:assignment-expression-value expression))
@@ -266,6 +270,17 @@ only job here is to form the CFG and merge non-terminating case values."
      (emit-match-value backend expression))
     ((typep expression 'termis:primitive-call)
      (emit-primitive backend expression))
+    ((typep expression 'termis:external-call-expression)
+     (let* ((external (termis:external-call-expression-external-function expression))
+	    (function (backend-binding backend external))
+	    (arguments (mapcar (lambda (argument) (emit-value backend argument))
+			       (termis:semantic-call-arguments expression))))
+       (if (typep (termis:semantic-external-function-declaration-result-type external)
+		  'termis:void-type)
+	   (progn
+	     (llvm:build-call (llvm-backend-builder backend) function arguments)
+	     (unit-value backend expression))
+	   (llvm:build-call (llvm-backend-builder backend) function arguments "call"))))
     ((typep expression 'termis:semantic-call)
      (let ((callee (termis:semantic-call-callee expression)))
        (unless (and (typep callee 'termis:reference-expression)

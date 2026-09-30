@@ -54,6 +54,19 @@
     (is (search "define i64 @__termis_00006E00006F00006F000070()" ir))
     (is (search "ret i64 0" ir))))
 
+(test lowers-external-c-declarations-with-explicit-linker-names
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(external-function release \"free\" ((pointer void)) void)
+                 (external-function string-length \"strlen\" ((pointer i8)) usize)
+                 (function main () i64 0)"))
+         (backend (termis.backend.llvm:generate-llvm
+                   (compilation-unit-semantic-program unit)))
+         (ir (termis.backend.llvm:print-llvm-module backend)))
+    (is (search "declare void @free(" ir))
+    (is (search "@strlen(" ir))
+    (is (not (search "__termis_000066000072000065000065" ir)))))
+
 (test emits-a-native-object-file
   (let* ((object (native-test-path "o"))
          (unit (compile-string (make-compiler) "(function answer () i64 42)"))

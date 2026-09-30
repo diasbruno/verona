@@ -8,6 +8,8 @@
               ((typep type 'termis:unit-type)
                (llvm:int-type (llvm-backend-pointer-width backend)
                               :context (llvm-backend-context backend)))
+              ((typep type 'termis:void-type)
+               (llvm:void-type :context (llvm-backend-context backend)))
               ((typep type 'termis:boolean-type)
                (llvm:int1-type :context (llvm-backend-context backend)))
               ((typep type 'termis:integer-type)
@@ -18,7 +20,13 @@
                  (32 (llvm:float-type :context (llvm-backend-context backend)))
                  (64 (llvm:double-type :context (llvm-backend-context backend)))))
               ((typep type 'termis:pointer-type)
-               (llvm:pointer-type (lower-type backend (termis:pointer-type-pointee type))))
+               ;; LLVM opaque pointers carry no pointee representation.  The
+               ;; legacy C API still accepts an element type, so use i8 for
+               ;; void* rather than attempting to form a pointer-to-void.
+               (llvm:pointer-type
+                (if (typep (termis:pointer-type-pointee type) 'termis:void-type)
+                    (llvm:int-type 8 :context (llvm-backend-context backend))
+                    (lower-type backend (termis:pointer-type-pointee type)))))
               ((typep type 'termis:function-type)
                (llvm:function-type
                 (lower-type backend (termis:function-type-result type))

@@ -125,6 +125,13 @@
    (return-type :initarg :return-type :reader function-declaration-return-type)
    (body :initarg :body :reader function-declaration-body)))
 
+;; Foreign declarations retain their linker spelling independently from their
+;; Termis binding name.  Their signatures use the ordinary Termis type syntax.
+(defclass external-function-declaration (declaration)
+  ((external-name :initarg :external-name :reader external-function-declaration-external-name)
+   (parameter-types :initarg :parameter-types :reader external-function-declaration-parameter-types)
+   (result-type :initarg :result-type :reader external-function-declaration-result-type)))
+
 (defclass macro-declaration (declaration)
   ((parameters :initarg :parameters :reader macro-declaration-parameters)
    (body :initarg :body :reader macro-declaration-body)))
@@ -189,7 +196,7 @@ result object avoids treating an ordinary list expression as several forms."
   (definitions '() :type list))
 
 (defparameter +definition-form-names+
-  '("%type" "%function" "%macro" "%constant" "%variable" "%generic" "%implementation"))
+  '("%type" "%function" "%external-function" "%macro" "%constant" "%variable" "%generic" "%implementation"))
 
 (defun definition-head-name (syntax)
   "Return SYNTAX's definition-form name, or NIL when it is not one."
@@ -346,6 +353,22 @@ expands syntax; this processor is the boundary that creates compiler objects."
                                  :parameters (second arguments)
                                  :return-type (third arguments)
                                  :body (fourth arguments))))
+            ((string= head "%external-function")
+             (let ((arguments (definition-elements expanded-syntax "external-function" 4)))
+               (unless (= (length arguments) 4)
+                 (definition-fail expanded-syntax
+                                  "%external-function requires a Termis name, external string name, parameter type list, and result type"))
+               (let ((external-name (syntax-datum (second arguments)))
+                     (parameter-types (third arguments)))
+                 (unless (stringp external-name)
+                   (definition-fail expanded-syntax "external function name must be a string"))
+                 (unless (termis-list-p (syntax-datum parameter-types))
+                   (definition-fail expanded-syntax "external function parameter types must be a list"))
+                 (make-declaration 'external-function-declaration
+                                   (definition-name expanded-syntax (first arguments))
+                                   :external-name external-name
+                                   :parameter-types parameter-types
+				   :result-type (fourth arguments)))))
             ((string= head "%macro")
              (let ((arguments (definition-elements expanded-syntax "macro" 3)))
               (unless (= (length arguments) 3)
@@ -400,7 +423,7 @@ expands syntax; this processor is the boundary that creates compiler objects."
                                        (qualified-name-name target) target)
                                    :generic-name target
                                    :parameters (second arguments) :return-type (third arguments)
-                                   :body (fourth arguments)))))))))
+				   :body (fourth arguments)))))))))
 
 (defun expand-top-level (syntax environment)
   "Expand SYNTAX into a TOP-LEVEL-EXPANSION-RESULT.
