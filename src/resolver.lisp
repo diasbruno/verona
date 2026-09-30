@@ -746,6 +746,10 @@ without changing the scope or binding model established here."
 					       (rest elements)))))
 	  (t (make-instance 'semantic-literal :syntax syntax)))))
 
+(define-condition unknown-type-error (semantic-error)
+  ((name :initarg :name :reader unknown-type-error-name))
+  (:default-initargs :message "unknown type"))
+
 (defun resolve-type-syntax (scope syntax)
   "Resolve the names embedded in a restricted type-language syntax tree.
 
@@ -755,7 +759,10 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
   (check-type scope semantic-scope)
   (check-type syntax syntax)
   (let ((datum (syntax-datum syntax)))
-    (cond ((or (verona-name-p datum) (qualified-name-p datum)) (resolve-name scope syntax))
+    (cond ((or (verona-name-p datum) (qualified-name-p datum))
+           (handler-case (resolve-name scope syntax)
+             (unresolved-name-error ()
+               (error 'unknown-type-error :syntax syntax :name datum))))
 	  ((unit-literal-p datum)
 	   (make-instance 'semantic-unit-type-syntax :syntax syntax))
 	  ((verona-list-p datum)
@@ -2016,7 +2023,36 @@ therefore visible, while the binding being built cannot see itself."
 
 ;;; Backend-readiness validation ------------------------------------------
 
-(define-condition backend-validation-error (semantic-error) ())
+(define-condition backend-validation-error (compiler-bug)
+  ((syntax :initarg :syntax :initform nil :reader backend-validation-error-syntax))
+  (:documentation "A frontend invariant reached the backend gate."))
+
+;; Stable identities are intentionally assigned near the specialised
+;; conditions, not inferred from their reports.  Wording can now evolve
+;; without invalidating editor integrations or semantic tests.
+(defmethod diagnostic-code-for ((condition expected-type-error))
+  (declare (ignore condition)) "E0301")
+(defmethod diagnostic-code-for ((condition unknown-type-error))
+  (declare (ignore condition)) "E0301")
+(defmethod diagnostic-code-for ((condition type-mismatch-error))
+  (declare (ignore condition)) "E0401")
+(defmethod diagnostic-code-for ((condition wrong-argument-count-error))
+  (declare (ignore condition)) "E0501")
+(defmethod diagnostic-code-for ((condition generic-arity-mismatch-error))
+  (declare (ignore condition)) "E0501")
+(defmethod diagnostic-code-for ((condition no-generic-implementation-error))
+  (declare (ignore condition)) "E0501")
+(defmethod diagnostic-code-for ((condition not-addressable-error))
+  (declare (ignore condition)) "E0701")
+(defmethod diagnostic-code-for ((condition not-writable-error))
+  (declare (ignore condition)) "E0701")
+
+(defmethod diagnostic-for-condition ((condition type-mismatch-error))
+  (make-diagnostic
+   :severity +error-severity+ :code "E0401" :message (princ-to-string condition)
+   :primary-location (condition-primary-range condition)
+   :data (list :expected-type (type-mismatch-error-expected condition)
+               :actual-type (type-mismatch-error-actual condition))))
 
 (defun backend-validation-fail (object control &rest arguments)
   (error 'backend-validation-error

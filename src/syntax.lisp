@@ -4,11 +4,17 @@
   ((datum :initarg :datum :reader syntax-datum)
    (source :initarg :source :reader syntax-source)
    (start :initarg :start :reader syntax-start)
-   (end :initarg :end :reader syntax-end)))
+   (end :initarg :end :reader syntax-end)
+   ;; NIL means reader-originated syntax.  Non-NIL is an EXPANSION-ORIGIN
+   ;; chain; its type is intentionally not constrained here because syntax is
+   ;; loaded before evaluator.lisp defines the provenance structure.
+   (expansion-origin :initarg :expansion-origin :initform nil
+                     :reader syntax-expansion-origin)))
 
-(defun make-syntax (datum source start end)
+(defun make-syntax (datum source start end &key expansion-origin)
   "Create source-aware Verona syntax for DATUM."
-  (make-instance 'syntax :datum datum :source source :start start :end end))
+  (make-instance 'syntax :datum datum :source source :start start :end end
+                 :expansion-origin expansion-origin))
 
 (defun syntax-with-datum (syntax datum)
   "Reuse SYNTAX's source span for a replacement DATUM."
@@ -16,7 +22,8 @@
   (make-syntax datum
                (syntax-source syntax)
                (syntax-start syntax)
-               (syntax-end syntax)))
+               (syntax-end syntax)
+               :expansion-origin (syntax-expansion-origin syntax)))
 
 (defmethod print-object ((object syntax) stream)
   (print-unreadable-object (object stream :type t :identity nil)

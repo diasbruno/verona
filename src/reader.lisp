@@ -1,6 +1,6 @@
 (in-package #:verona)
 
-(define-condition verona-read-error (error)
+(define-condition verona-read-error (user-compilation-error)
   ((source :initarg :source :reader verona-read-error-source)
    (location :initarg :location :reader verona-read-error-location)
    (message :initarg :message :reader verona-read-error-message))
@@ -12,9 +12,20 @@
                        (source-location-column location)
                        (verona-read-error-message condition))))))
 
+(defmethod diagnostic-code-for ((condition verona-read-error))
+  (declare (ignore condition)) "E0001")
+
+(defmethod condition-primary-range ((condition verona-read-error))
+  (let ((location (verona-read-error-location condition)))
+    (make-source-range location location)))
+
 (defstruct (reader-state (:constructor make-reader-state (source)))
   source
-  (offset 0 :type (integer 0 *)))
+  (offset 0 :type (integer 0 *))
+  (nesting-depth 0 :type (integer 0 *)))
+
+(defparameter *reader-nesting-depth-limit* 1024
+  "Maximum balanced list nesting accepted from one Verona source file.")
 
 (defun reader-contents (state)
   (source-contents (reader-state-source state)))
@@ -158,15 +169,20 @@
     value))
 
 (defun read-list (state start)
+  (when (>= (reader-state-nesting-depth state) *reader-nesting-depth-limit*)
+    (reader-fail state "reader nesting limit exceeded" start))
   (reader-advance state)
-  (let ((elements '()))
-    (loop do (skip-whitespace state)
-              (when (reader-at-end-p state)
-                (reader-fail state "unterminated list" start))
-              (when (char= (reader-peek state) #\))
-                (reader-advance state)
-                (return (apply #'make-verona-list (nreverse elements))))
-              (push (read-form state) elements))))
+  (incf (reader-state-nesting-depth state))
+  (unwind-protect
+       (let ((elements '()))
+         (loop do (skip-whitespace state)
+                   (when (reader-at-end-p state)
+                     (reader-fail state "unterminated list" start))
+                   (when (char= (reader-peek state) #\))
+                     (reader-advance state)
+                     (return (apply #'make-verona-list (nreverse elements))))
+                   (push (read-form state) elements)))
+    (decf (reader-state-nesting-depth state))))
 
 (defun read-form (state)
   (skip-whitespace state)

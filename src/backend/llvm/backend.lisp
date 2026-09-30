@@ -57,8 +57,18 @@ Common Lisp implementation or the compiler host."
 (defun (setf backend-binding) (value backend binding)
   (setf (gethash binding (llvm-backend-bindings backend)) value))
 
+(defun llvm-mangle-text (text)
+  "Encode TEXT injectively without relying on Lisp symbol/package printing."
+  (with-output-to-string (stream)
+    (loop for character across text
+          do (format stream "~6,'0X" (char-code character)))))
+
 (defun llvm-name (binding)
-  "Mangle a semantic name so no source spelling shares generated LLVM symbols."
+  "Mangle a semantic name so no source spelling shares generated LLVM symbols.
+
+The spelling is based only on Verona module/declaration identity.  It is
+therefore independent of Common Lisp packages, object identity, and table
+iteration order."
   (with-output-to-string (stream)
     (write-string "__verona_" stream)
     (let* ((source (cond ((typep binding 'verona:declaration) binding)
@@ -68,11 +78,36 @@ Common Lisp implementation or the compiler host."
       ;; String compilation retains its historic spelling for compatibility;
       ;; every filename-derived module contributes its semantic identity.
       (when (and module (verona:module-identity-explicit-p module))
-        (loop for character across (verona:module-name-string (verona:module-name module))
-              do (format stream "~6,'0X" (char-code character)))
+        (write-string (llvm-mangle-text
+                       (verona:module-name-string (verona:module-name module))) stream)
         (write-string "_" stream)))
-    (loop for character across (verona:verona-name-value (verona:semantic-binding-name binding))
-          do (format stream "~6,'0X" (char-code character)))))
+    (write-string (llvm-mangle-text
+                   (verona:verona-name-value (verona:semantic-binding-name binding))) stream)))
+
+(defun llvm-type-mangle (type)
+  "Stable, collision-resistant identity spelling for generic implementations." 
+  (cond ((typep type 'verona:never-type) "never")
+        ((typep type 'verona:unit-type) "unit")
+        ((typep type 'verona:void-type) "void")
+        ((typep type 'verona:boolean-type) "bool")
+        ((typep type 'verona:string-type) "string")
+        ((typep type 'verona:integer-type)
+         (format nil "~:[u~;i~]~D" (verona:integer-type-signed type)
+                 (verona:integer-type-width type)))
+        ((typep type 'verona:float-type)
+         (format nil "f~D" (verona:float-type-width type)))
+        ((typep type 'verona:pointer-type)
+         (format nil "p_~A" (llvm-type-mangle (verona:pointer-type-pointee type))))
+        ((typep type 'verona:defined-type)
+         (llvm-name (verona:defined-type-declaration type)))
+        ;; Function types cannot currently be generic arguments, but retain a
+        ;; deterministic spelling if the type system admits them later.
+        ((typep type 'verona:function-type)
+         (format nil "fn_~{~A~^_~}_to_~A"
+                 (mapcar #'llvm-type-mangle (verona:function-type-parameters type))
+                 (llvm-type-mangle (verona:function-type-result type))))
+        (t (error 'verona:compiler-bug
+                  :message (format nil "cannot mangle unresolved Verona type ~S" type)))))
 
 (defun semantic-source-binding (semantic-declaration)
   (verona:semantic-declaration-source-declaration semantic-declaration))

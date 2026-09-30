@@ -17,40 +17,90 @@
   (make-instance 'verona-function :implementation implementation))
 
 (defclass verona-macro (verona-callable)
-  ((implementation :initarg :implementation :reader verona-macro-implementation)))
+  ((implementation :initarg :implementation :reader verona-macro-implementation)
+   ;; A source-defined macro records its declaration syntax.  Bootstrap
+   ;; macros have NIL here, but expansion provenance remains useful because
+   ;; the invocation itself is always source-aware.
+   (source :initarg :source :initform nil :reader verona-macro-source)))
 
 (defun verona-macro-p (object)
   (typep object 'verona-macro))
 
-(defun make-verona-macro (implementation)
+(defun make-verona-macro (implementation &key source)
   "Wrap IMPLEMENTATION as a callable that receives unevaluated SYNTAX arguments.
 
 IMPLEMENTATION must return one SYNTAX object."
   (check-type implementation function)
-  (make-instance 'verona-macro :implementation implementation))
+  (make-instance 'verona-macro :implementation implementation :source source))
 
 ;; Macro implementations receive their arguments as syntax objects.  Retaining
 ;; the enclosing form during expansion lets the bootstrap definition macros
 ;; replace only their head while preserving the complete source span.
 (defvar *macro-expansion-syntax* nil)
 
-(define-condition unbound-name-error (error)
+(define-condition unbound-name-error (user-compilation-error)
   ((name :initarg :name :reader unbound-name-error-name))
   (:report (lambda (condition stream)
              (format stream "Unbound Verona name ~S"
                      (verona-name-value (unbound-name-error-name condition))))))
 
-(define-condition not-callable-error (error)
+(define-condition not-callable-error (user-compilation-error)
   ((value :initarg :value :reader not-callable-error-value))
   (:report (lambda (condition stream)
              (format stream "Verona value ~S is not callable"
                      (not-callable-error-value condition)))))
 
-(define-condition invalid-macro-result-error (error)
+(define-condition invalid-macro-result-error (user-compilation-error)
   ((value :initarg :value :reader invalid-macro-result-error-value))
   (:report (lambda (condition stream)
              (format stream "A Verona macro returned ~S, not syntax"
                      (invalid-macro-result-error-value condition)))))
+
+(define-condition macro-expansion-limit-error (user-compilation-error)
+  ((limit :initarg :limit :reader macro-expansion-limit-error-limit)
+   (syntax :initarg :syntax :reader macro-expansion-limit-error-syntax))
+  (:report (lambda (condition stream)
+             (format stream "macro expansion exceeded the limit of ~D steps"
+                     (macro-expansion-limit-error-limit condition)))))
+
+(defparameter *macro-expansion-depth-limit* 256
+  "Maximum macro-expansion steps for one expansion operation.")
+(defvar *macro-expansion-count* 0)
+
+(defmethod diagnostic-code-for ((condition unbound-name-error))
+  (declare (ignore condition)) "E0201")
+(defmethod diagnostic-code-for ((condition invalid-macro-result-error))
+  (declare (ignore condition)) "E0001")
+(defmethod diagnostic-code-for ((condition macro-expansion-limit-error))
+  (declare (ignore condition)) "E0001")
+
+(defstruct (expansion-origin
+            (:constructor make-expansion-origin (invocation macro parent-origin)))
+  invocation
+  macro
+  parent-origin)
+
+(defun annotate-macro-expansion (result invocation macro)
+  "Attach a Verona-level expansion chain to macro-generated syntax."
+  (check-type result syntax)
+  (make-syntax (syntax-datum result) (syntax-source result)
+               (syntax-start result) (syntax-end result)
+               :expansion-origin
+               (make-expansion-origin invocation (verona-macro-source macro)
+                                      (syntax-expansion-origin invocation))))
+
+(defun invoke-verona-macro (macro invocation arguments)
+  (when (>= *macro-expansion-count* *macro-expansion-depth-limit*)
+    (error 'macro-expansion-limit-error :limit *macro-expansion-depth-limit*
+           :syntax invocation))
+  (incf *macro-expansion-count*)
+  (let ((result (let ((*macro-expansion-syntax* invocation))
+                  (apply (verona-macro-implementation macro) arguments))))
+    ;; Compiler top-level macros can additionally return their private
+    ;; multiple-definition result object.  It is annotated by that layer.
+    (if (typep result 'syntax)
+        (annotate-macro-expansion result invocation macro)
+        result)))
 
 (defclass environment ()
   ((parent :initarg :parent :initform nil :reader environment-parent)
@@ -124,15 +174,17 @@ Expansion intentionally stops once the outer form is not a macro; definition
 forms such as %FUNCTION are therefore left as Verona syntax for later processing."
   (check-type syntax syntax)
   (check-type environment environment)
-  (let ((macro (macro-at-head syntax environment)))
-    (if macro
-        (let* ((arguments (rest (verona-list-elements (syntax-datum syntax))))
-               (result (let ((*macro-expansion-syntax* syntax))
-                         (apply (verona-macro-implementation macro) arguments))))
-          (unless (typep result 'syntax)
-            (error 'invalid-macro-result-error :value result))
-          (expand result environment))
-        syntax)))
+  (let ((*macro-expansion-count* 0))
+    (labels ((expand-one (form)
+               (let ((macro (macro-at-head form environment)))
+                 (if macro
+                     (let* ((arguments (rest (verona-list-elements (syntax-datum form))))
+                            (result (invoke-verona-macro macro form arguments)))
+                       (unless (typep result 'syntax)
+                         (error 'invalid-macro-result-error :value result))
+                       (expand-one result))
+                     form))))
+      (expand-one syntax))))
 
 (defun evaluate-list (syntax environment)
   (let* ((elements (verona-list-elements (syntax-datum syntax)))

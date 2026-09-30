@@ -31,6 +31,8 @@
    #:compile-root #:compile-file #:default-output-path
    #:compiler-driver-error #:unsupported-artifact #:unsupported-target
    #:llvm-verification-failure #:object-emission-failure #:invalid-entry-point
+   #:tool-failure #:tool-failure-executable #:tool-failure-arguments
+   #:tool-failure-exit-status #:tool-failure-stdout #:tool-failure-stderr
    #:toolchain-failure #:toolchain-failure-tool #:toolchain-failure-arguments
    #:toolchain-failure-exit-status #:toolchain-failure-stdout
    #:toolchain-failure-stderr #:linker-failure #:archiver-failure

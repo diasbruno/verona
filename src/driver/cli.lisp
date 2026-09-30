@@ -58,5 +58,9 @@
             (format t "~A~%" (artifact-path artifact))
             artifact)))
     (error (condition)
-      (format *error-output* "verona: ~A~%" condition)
+      (let ((diagnostic (and (typep condition 'verona:user-compilation-error)
+                             (verona:diagnostic-for-condition condition))))
+        (if diagnostic
+            (verona:render-diagnostic diagnostic *error-output*)
+            (format *error-output* "verona: ~A~%" condition)))
       (uiop:quit 1))))

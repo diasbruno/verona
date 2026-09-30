@@ -25,7 +25,7 @@
   "A generic has no public symbol; each selected implementation does."
   (format nil "~A_impl_~{~A~^_~}"
           (llvm-name declaration)
-          (mapcar #'verona:verona-type-name
+          (mapcar #'llvm-type-mangle
                   (verona:generic-implementation-parameter-types declaration))))
 
 (defun declare-generic-implementation (backend declaration)

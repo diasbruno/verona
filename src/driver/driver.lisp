@@ -4,7 +4,7 @@
 ;;; LLVM lowering remains in VERONA.BACKEND.LLVM, and native commands live in
 ;;; the Toolchain protocol below.
 
-(define-condition compiler-driver-error (error)
+(define-condition compiler-driver-error (verona:user-compilation-error)
   ((message :initarg :message :reader compiler-driver-error-message))
   (:report (lambda (condition stream)
              (write-string (compiler-driver-error-message condition) stream))))
@@ -15,15 +15,29 @@
 (define-condition object-emission-failure (compiler-driver-error) ())
 (define-condition invalid-entry-point (compiler-driver-error) ())
 
-(define-condition toolchain-failure (compiler-driver-error)
-  ((tool :initarg :tool :reader toolchain-failure-tool)
-   (arguments :initarg :arguments :reader toolchain-failure-arguments)
-   (exit-status :initarg :exit-status :reader toolchain-failure-exit-status)
-   (stdout :initarg :stdout :reader toolchain-failure-stdout)
-   (stderr :initarg :stderr :reader toolchain-failure-stderr)))
+(define-condition tool-failure (compiler-driver-error)
+  ((executable :initarg :executable :reader tool-failure-executable)
+   (arguments :initarg :arguments :reader tool-failure-arguments)
+   (exit-status :initarg :exit-status :reader tool-failure-exit-status)
+   (stdout :initarg :stdout :reader tool-failure-stdout)
+   (stderr :initarg :stderr :reader tool-failure-stderr))
+  (:documentation "Structured failure from an external native tool."))
+
+;; Keep the Step 23 spelling as a compatibility subtype while presenting the
+;; uniform ToolFailure shape to diagnostics and embedding callers.
+(define-condition toolchain-failure (tool-failure)
+  ((tool :initarg :tool :reader toolchain-failure-tool))
+  (:default-initargs :executable nil))
 (define-condition linker-failure (toolchain-failure) ())
 (define-condition archiver-failure (toolchain-failure) ())
 (define-condition shared-library-link-failure (linker-failure) ())
+
+(defmethod verona:diagnostic-code-for ((condition unsupported-artifact))
+  (declare (ignore condition)) "E1001")
+(defmethod verona:diagnostic-code-for ((condition unsupported-target))
+  (declare (ignore condition)) "E1002")
+(defmethod verona:diagnostic-code-for ((condition toolchain-failure))
+  (declare (ignore condition)) "E1003")
 
 (defclass compilation-target ()
   ((triple :initarg :triple :reader compilation-target-triple)
@@ -108,7 +122,8 @@ neither value is taken from the Common Lisp host."
                          :ignore-error-status t)
     (unless (zerop status)
       (error failure-class :message (format nil "~A failed" tool) :tool tool
-             :arguments arguments :exit-status status :stdout stdout :stderr stderr))))
+             :executable tool :arguments arguments :exit-status status
+             :stdout stdout :stderr stderr))))
 
 (defun native-link-arguments (object output target options)
   (when (and (link-options-frameworks options)
@@ -220,7 +235,9 @@ in-memory LLVM module, verification, object emission, and toolchain handoff."
                                      :optimization-level
                                      (compiler-driver-optimization-level driver))
                     (error (condition)
-                      (error 'llvm-verification-failure :message (princ-to-string condition))))))
+                      (if (typep condition 'verona:compiler-bug)
+                          (error condition)
+                          (error 'llvm-verification-failure :message (princ-to-string condition))))))
     (when (eq artifact-kind :executable)
       (handler-case (add-platform-entry-wrapper backend program)
         (error (condition)
@@ -228,7 +245,9 @@ in-memory LLVM module, verification, object emission, and toolchain handoff."
     (hide-verona-symbols backend program)
     (handler-case (verify-llvm-module backend)
       (error (condition)
-        (error 'llvm-verification-failure :message (princ-to-string condition))))
+        (if (typep condition 'verona:compiler-bug)
+            (error condition)
+            (error 'llvm-verification-failure :message (princ-to-string condition)))))
     (if (eq artifact-kind :object)
         (toolchain-emit-object (compiler-driver-toolchain driver) backend output)
         (let ((object (temporary-object-path)))

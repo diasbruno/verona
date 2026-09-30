@@ -100,7 +100,7 @@ parameter bindings before calling this operation."
         binding
         (error 'unresolved-name-error :name name :syntax nil))))
 
-(define-condition semantic-error (error)
+(define-condition semantic-error (user-compilation-error)
   ((syntax :initarg :syntax :initform nil :reader semantic-error-syntax)
    (message :initarg :message :reader semantic-error-message))
   (:report (lambda (condition stream)
@@ -166,3 +166,14 @@ parameter bindings before calling this operation."
 (define-condition unreachable-expression-error (semantic-error) ())
 
 (define-condition return-outside-function-error (semantic-error) ())
+
+(defmethod diagnostic-code-for ((condition semantic-error))
+  (declare (ignore condition)) "E0001")
+(defmethod diagnostic-code-for ((condition unresolved-name-error))
+  (declare (ignore condition)) "E0201")
+(defmethod diagnostic-code-for ((condition duplicate-local-binding-error))
+  (declare (ignore condition)) "E0101")
+(defmethod diagnostic-code-for ((condition non-exhaustive-match-error))
+  (declare (ignore condition)) "E0601")
+(defmethod diagnostic-code-for ((condition unreachable-pattern-error))
+  (declare (ignore condition)) "E0601")

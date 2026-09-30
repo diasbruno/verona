@@ -37,6 +37,7 @@
   :depends-on (#:verona #:fiveam)
   :serial t
   :components ((:file "tests/foundation")
+               (:file "tests/hardening")
                (:file "tests/examples")
                (:file "tests/modules")))
 

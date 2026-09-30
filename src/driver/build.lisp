@@ -12,7 +12,7 @@
   (and (build-name-p left) (build-name-p right)
        (string= (build-name-value left) (build-name-value right))))
 
-(define-condition build-error (error)
+(define-condition build-error (verona:user-compilation-error)
   ((message :initarg :message :reader build-error-message)
    (syntax :initarg :syntax :initform nil :reader build-error-syntax))
   (:report (lambda (condition stream)
@@ -30,6 +30,16 @@
 (define-condition duplicate-build-target-error (build-error) ())
 (define-condition unknown-build-option-error (build-parse-error) ())
 (define-condition unsupported-build-option-error (build-error) ())
+
+(defmethod verona:diagnostic-code-for ((condition build-parse-error))
+  (declare (ignore condition)) "E1101")
+(defmethod verona:diagnostic-code-for ((condition duplicate-build-target-error))
+  (declare (ignore condition)) "E1102")
+(defmethod verona:diagnostic-code-for ((condition unknown-build-option-error))
+  (declare (ignore condition)) "E1103")
+(defmethod verona:condition-primary-range ((condition build-error))
+  (let ((syntax (build-error-syntax condition)))
+    (and syntax (verona:syntax-source-range syntax))))
 
 (defclass build-file ()
   ((source :initarg :source :reader build-file-source)

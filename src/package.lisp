@@ -4,21 +4,51 @@
   (:export
    #:compiler
    #:make-compiler
+   #:compiler-phase-timing-p
+   #:compiler-phase-timings
+   #:clear-compiler-phase-timings
    #:source
    #:make-source
    #:source-from-file
    #:source-name
    #:source-contents
    #:source-location
+   #:source-location-source
    #:source-location-offset
    #:source-location-line
    #:source-location-column
+   #:source-range
+   #:make-source-range
+   #:source-range-start
+   #:source-range-end
+   #:syntax-source-range
+   #:diagnostic
+   #:make-diagnostic
+   #:diagnostic-severity
+   #:diagnostic-code
+   #:diagnostic-message
+   #:diagnostic-primary-location
+   #:diagnostic-secondary-locations
+   #:diagnostic-notes
+   #:diagnostic-data
+   #:+error-severity+
+   #:+warning-severity+
+   #:diagnostic-code-for
+   #:diagnostic-for-condition
+   #:render-diagnostic
+   #:user-compilation-error
+   #:condition-diagnostic
+   #:compiler-bug
+   #:compiler-bug-message
+   #:compiler-bug-context
+   #:compiler-assert
    #:syntax
    #:make-syntax
    #:syntax-datum
    #:syntax-source
    #:syntax-start
    #:syntax-end
+   #:syntax-expansion-origin
    #:syntax-with-datum
    #:verona-name
    #:make-verona-name
@@ -56,6 +86,12 @@
    #:verona-macro
    #:make-verona-macro
    #:verona-macro-p
+   #:verona-macro-source
+   #:expansion-origin
+   #:make-expansion-origin
+   #:expansion-origin-invocation
+   #:expansion-origin-macro
+   #:expansion-origin-parent-origin
    #:environment
    #:make-environment
    #:environment-parent
@@ -68,8 +104,13 @@
    #:not-callable-error-value
    #:evaluate
    #:expand
+   #:macro-expansion-limit-error
+   #:macro-expansion-limit-error-limit
+   #:macro-expansion-limit-error-syntax
+   #:*macro-expansion-depth-limit*
    #:make-bootstrap-environment
    #:read-source
+   #:*reader-nesting-depth-limit*
    #:compilation-unit
    #:compilation-unit-source
    #:compilation-unit-forms
@@ -171,6 +212,10 @@
    #:native-export-binding-function
    #:native-export-binding-external-name
    #:compile-source
+   #:read-verona
+   #:macroexpand-verona
+   #:analyze-verona
+   #:typecheck-verona
    #:semantic-program-module-scope-for
    #:make-bootstrap-semantic-scope
    #:parameter-binding
@@ -396,6 +441,8 @@
    #:primitive-operation-kind
    #:primitive-operation-nan-semantics
    #:expected-type-error
+   #:unknown-type-error
+   #:unknown-type-error-name
    #:expected-type-error-binding
    #:resolve-type
    #:resolve-types

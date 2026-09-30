@@ -1,10 +1,31 @@
 (in-package #:verona)
 
 (defclass compiler ()
-  ((search-paths :initarg :search-paths :initform '() :reader compiler-search-paths)))
+  ((search-paths :initarg :search-paths :initform '() :reader compiler-search-paths)
+   ;; Timing is opt-in observability.  It does not affect semantic traversal
+   ;; or make timing data part of compilation output.
+   (phase-timing-p :initarg :phase-timing-p :initform nil :reader compiler-phase-timing-p)
+   (phase-timings :initform '() :accessor compiler-phase-timings)))
 
-(defun make-compiler (&key (search-paths '()))
-  (make-instance 'compiler :search-paths (mapcar #'pathname search-paths)))
+(defun make-compiler (&key (search-paths '()) (phase-timing-p nil))
+  (make-instance 'compiler :search-paths (mapcar #'pathname search-paths)
+                 :phase-timing-p phase-timing-p))
+
+(defun clear-compiler-phase-timings (compiler)
+  (setf (compiler-phase-timings compiler) '()) compiler)
+
+(defun call-with-compiler-phase (compiler phase thunk)
+  "Call THUNK and, when enabled, record PHASE's elapsed milliseconds."
+  (if (and compiler (compiler-phase-timing-p compiler))
+      (let ((start (get-internal-real-time)))
+        (multiple-value-prog1 (funcall thunk)
+          (setf (compiler-phase-timings compiler)
+                (append (compiler-phase-timings compiler)
+                        (list (cons phase
+                                    (* 1000.0
+                                       (/ (- (get-internal-real-time) start)
+                                          internal-time-units-per-second))))))))
+      (funcall thunk)))
 
 (defclass compilation-unit ()
   ((source :initarg :source
@@ -70,7 +91,7 @@
   ((modules :initarg :modules :reader module-graph-modules)
    (edges :initarg :edges :reader module-graph-edges)))
 
-(define-condition module-error (error)
+(define-condition module-error (user-compilation-error)
   ((module :initarg :module :initform nil :reader module-error-module)
    (source :initarg :source :initform nil :reader module-error-source)))
 (define-condition module-not-found (module-error) ())
@@ -81,6 +102,13 @@
   ((alias :initarg :alias :reader duplicate-import-alias-alias)))
 (define-condition unknown-export (module-error)
   ((name :initarg :name :reader unknown-export-name)))
+
+(defmethod diagnostic-code-for ((condition module-error))
+  (declare (ignore condition)) "E0901")
+
+(defmethod condition-primary-range ((condition module-error))
+  (let ((source (module-error-source condition)))
+    (and (typep source 'syntax) (syntax-source-range source))))
 
 (defun parse-module-name (syntax)
   "Turn import syntax into a ModuleName without making ordinary names modules."
@@ -162,7 +190,7 @@
    (return-type :initarg :return-type :reader implementation-declaration-return-type)
    (body :initarg :body :reader implementation-declaration-body)))
 
-(define-condition definition-error (error)
+(define-condition definition-error (user-compilation-error)
   ((syntax :initarg :syntax :reader definition-error-syntax)
    (message :initarg :message :reader definition-error-message))
   (:report (lambda (condition stream)
@@ -194,6 +222,26 @@
                        (source-location-column existing-location))))))
 
 (define-condition non-definition-top-level-error (definition-error) ())
+
+(defmethod diagnostic-code-for ((condition definition-error))
+  (declare (ignore condition)) "E0001")
+
+(defmethod diagnostic-code-for ((condition duplicate-declaration-error))
+  (declare (ignore condition)) "E0101")
+
+(defmethod condition-primary-range ((condition definition-error))
+  (syntax-source-range (definition-error-syntax condition)))
+
+(defmethod diagnostic-for-condition ((condition duplicate-declaration-error))
+  (let ((previous (declaration-source
+                   (duplicate-declaration-error-existing condition))))
+    (make-diagnostic
+     :severity +error-severity+ :code "E0101"
+     :message (format nil "duplicate declaration `~A`"
+                      (verona-name-value (duplicate-declaration-error-name condition)))
+     :primary-location (condition-primary-range condition)
+     :secondary-locations (list (syntax-source-range previous))
+     :notes (list "previous declaration is here"))))
 
 (defstruct (top-level-expansion-result
             (:constructor make-top-level-expansion-result (definitions)))
@@ -325,7 +373,8 @@ never evaluates a declaration body."
                      (typep result 'top-level-expansion-result))
            (definition-fail definition
                             "%macro body must evaluate to syntax or top-level definitions"))
-         result)))))
+         result)))
+   :source definition))
 
 (defun process-definition (context unit source &optional (expanded-syntax source))
   "Turn EXPANDED-SYNTAX into a declaration, retaining its original SOURCE.
@@ -440,22 +489,25 @@ Unlike ordinary EXPAND, this protocol permits a macro to return an explicit
 TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
   (check-type syntax syntax)
   (check-type environment environment)
-  (labels ((expand-one (form)
-             (check-type form syntax)
-             (let ((macro (macro-at-head form environment)))
-               (if (not macro)
-                   (list form)
-                   (let ((result (let ((*macro-expansion-syntax* form))
-                                   (apply (verona-macro-implementation macro)
-                                          (rest (verona-list-elements
-                                                 (syntax-datum form)))))))
-                     (cond ((typep result 'syntax) (expand-one result))
-                           ((typep result 'top-level-expansion-result)
-                            (mapcan #'expand-one
-                                    (top-level-expansion-result-definitions result)))
-                           (t
-                            (error 'invalid-macro-result-error :value result))))))))
-    (make-top-level-expansion-result (expand-one syntax))))
+  (let ((*macro-expansion-count* 0))
+    (labels ((expand-one (form)
+               (check-type form syntax)
+               (let ((macro (macro-at-head form environment)))
+                 (if (not macro)
+                     (list form)
+                     (let ((result (invoke-verona-macro
+                                    macro form
+                                    (rest (verona-list-elements
+                                           (syntax-datum form))))))
+                       (cond ((typep result 'syntax) (expand-one result))
+                             ((typep result 'top-level-expansion-result)
+                              (mapcan #'expand-one
+                                      (mapcar (lambda (definition)
+                                                (annotate-macro-expansion definition form macro))
+                                              (top-level-expansion-result-definitions result))))
+                             (t
+                              (error 'invalid-macro-result-error :value result))))))))
+      (make-top-level-expansion-result (expand-one syntax)))))
 
 (defun make-compilation-environment ()
   "Create the compile-time environment used while constructing one unit."
@@ -603,46 +655,93 @@ with a Verona module EXPORT."
                 (setf (module-loader-loading-stack loader) old-stack)))
             module)))))
 
-(defun compile-source (source &key target (pointer-width 64))
+(defun compile-source (source &key target (pointer-width 64) compiler)
   (let* ((name (make-module-name (make-verona-name "string")))
          (module (make-instance 'module :name name :identity-explicit-p nil
-                                :source source :forms (read-source source)
+                                :source source
+                                :forms (call-with-compiler-phase compiler :read
+                                                                 (lambda () (read-source source)))
                                 :environment (make-compilation-environment))))
-    (collect-module module (make-instance 'module-loader :search-paths '()))
-    (resolve-program module (list module) :target target :pointer-width pointer-width)
+    (call-with-compiler-phase compiler :declarations
+                              (lambda () (collect-module module
+                                                         (make-instance 'module-loader :search-paths '()))))
+    (call-with-compiler-phase compiler :resolve-and-typecheck
+                              (lambda () (resolve-program module (list module)
+                                                        :target target :pointer-width pointer-width)))
     module))
+
+;;; Development-stage APIs -------------------------------------------------
+;; These deliberately return the real phase products, rather than debug
+;; strings, so SBCL's inspector remains useful while evolving the compiler.
+
+(defun read-verona (source-or-contents &key (name "<string>"))
+  "Read Verona source without macro expansion or semantic analysis."
+  (read-source (if (typep source-or-contents 'source)
+                   source-or-contents
+                   (make-source name source-or-contents))))
+
+(defun macroexpand-verona (syntax-or-contents &key (name "<string>") environment)
+  "Expand a top-level Verona form and retain expansion provenance."
+  (let ((environment (or environment (make-compilation-environment))))
+    (cond ((typep syntax-or-contents 'syntax)
+           (expand-top-level syntax-or-contents environment))
+          (t (mapcar (lambda (form) (expand-top-level form environment))
+                     (read-verona syntax-or-contents :name name))))))
+
+(defun analyze-verona (source-or-contents &key (name "<string>") target
+                                          (pointer-width 64))
+  "Collect and resolve a source unit, returning its semantic program."
+  (let ((unit (compile-source
+               (if (typep source-or-contents 'source) source-or-contents
+                   (make-source name source-or-contents))
+               :target target :pointer-width pointer-width)))
+    (compilation-unit-semantic-program unit)))
+
+(defun typecheck-verona (source-or-contents &rest arguments)
+  "Alias for ANALYZE-VERONA: resolution currently includes type checking."
+  (apply #'analyze-verona source-or-contents arguments))
 
 (defun compile-string (compiler contents &key (name "<string>") target (pointer-width 64))
   "Read and discover primitive top-level declarations in CONTENTS."
   (check-type compiler compiler)
-  (compile-source (make-source name contents) :target target :pointer-width pointer-width))
+  (clear-compiler-phase-timings compiler)
+  (compile-source (make-source name contents) :target target :pointer-width pointer-width
+                  :compiler compiler))
 
 (defun compile-file (compiler pathname &key target (pointer-width 64))
   "Read and discover primitive top-level declarations in PATHNAME."
   (check-type compiler compiler)
+  (clear-compiler-phase-timings compiler)
   (let* ((path (pathname pathname))
          (entry-name (module-name-from-pathname path))
          (loader (make-instance 'module-loader
                                 :search-paths
                                 (cons (make-pathname :name nil :type nil :defaults path)
                                       (compiler-search-paths compiler))))
-         (entry (module-loader-load loader entry-name))
+         (entry (call-with-compiler-phase compiler :read-and-declarations
+                                          (lambda () (module-loader-load loader entry-name))))
          ;; Recursive loading pushes a dependency after its importer has been
          ;; cached, so the cache's final order is already dependencies-first.
          (modules (mapcar #'cdr (module-loader-loaded-modules loader))))
-    (resolve-program entry modules :target target :pointer-width pointer-width)
+    (call-with-compiler-phase compiler :resolve-and-typecheck
+                              (lambda () (resolve-program entry modules :target target
+                                                          :pointer-width pointer-width)))
     entry))
 
 (defun compile-module (compiler name &key target (pointer-width 64))
   "Compile module NAME from COMPILER's ordered module search paths."
   (check-type compiler compiler)
+  (clear-compiler-phase-timings compiler)
   (let* ((module-name (if (module-name-p name) name
                           (parse-module-name
                            (make-syntax (make-verona-name name)
                                         (make-source "<module>" "")
                                         (make-source-location) (make-source-location)))))
          (loader (make-instance 'module-loader :search-paths (compiler-search-paths compiler)))
-         (entry (module-loader-load loader module-name))
+         (entry (call-with-compiler-phase compiler :read-and-declarations
+                                          (lambda () (module-loader-load loader module-name))))
          (modules (mapcar #'cdr (module-loader-loaded-modules loader))))
-    (resolve-program entry modules :target target :pointer-width pointer-width)
+    (call-with-compiler-phase compiler :resolve-and-typecheck
+                              (lambda () (resolve-program entry modules :target target
+                                                          :pointer-width pointer-width)))
     entry))
