@@ -1,3 +1,0 @@
-(module std/process
-  (type Process i64)
-  (type ProcessStatus i32))

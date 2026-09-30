@@ -1,4 +1,0 @@
-(module std/string
-  (import std/data)
-
-  (type String Data))

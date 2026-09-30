@@ -1,7 +1,0 @@
-(module std/os
-  (extern fn exit
-    ((params ((status i32)))
-     (return void)
-     (requires ())
-     (documentation "Terminate the current process with a status code."))
-    "exit"))

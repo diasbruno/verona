@@ -1,3 +1,0 @@
-(module std/time
-  (type Instant i64)
-  (type Duration i64))

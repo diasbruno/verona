@@ -1,2 +1,0 @@
-(module std/data
-  (type Data (& u8)))
