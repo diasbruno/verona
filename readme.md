@@ -50,17 +50,37 @@ Enter the Nix shell, then run:
 make test
 ```
 
-## Native compiler
+## Standalone executable
 
-`bin/termis` is a thin command-line layer over the reusable
-`termis.compiler:compiler-driver` API.  It resolves an explicit native target
-before frontend analysis, verifies the in-memory LLVM module, emits an object,
-and delegates final linking or archiving to the host toolchain.
+Build a self-contained `termis` command with SBCL's runtime bundled into the
+image:
 
 ```sh
-bin/termis compile src/app.termis -o app
-bin/termis compile src/lib.termis --emit static-library -o libtermis.a
-bin/termis compile src/lib.termis --emit shared-library -o libtermis.dylib
+make build
+```
+
+This creates `build/termis`. The build must run from the Termis development
+shell because it needs the configured LLVM bindings. The resulting executable
+can then be installed on the system path, for example:
+
+```sh
+install -m 755 build/termis /usr/local/bin/termis
+```
+
+The executable is native to the platform and architecture where it was built.
+
+## Native compiler
+
+The `termis` command is a thin layer over the reusable
+`termis.compiler:compiler-driver` API. `make build` produces the standalone
+command described above. It resolves an explicit native target before frontend
+analysis, verifies the in-memory LLVM module, emits an object, and delegates
+final linking or archiving to the host toolchain.
+
+```sh
+termis compile src/app.termis -o app
+termis compile src/lib.termis --emit static-library -o libtermis.a
+termis compile src/lib.termis --emit shared-library -o libtermis.dylib
 ```
 
 Executables require `(function main () unit ...)`; the generated platform
@@ -93,7 +113,7 @@ output directory belongs to the invocation, not the build file:
 ```
 
 ```sh
-bin/termis build app ./dist/bin
+termis build app ./dist/bin
 ```
 
 Top-level `static-library` and `shared-library` declarations use the same
