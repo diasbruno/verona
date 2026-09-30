@@ -30,6 +30,7 @@
   :serial t
   :components ((:file "src/driver/package")
                (:file "src/driver/driver")
+               (:file "src/driver/build")
                (:file "src/driver/cli")))
 
 (asdf:defsystem #:termis/tests
@@ -50,4 +51,5 @@
   :description "FiveAM tests for the Termis compiler driver"
   :depends-on (#:termis/llvm-tests #:termis/compiler)
   :serial t
-  :components ((:file "tests/compiler-driver")))
+  :components ((:file "tests/compiler-driver")
+               (:file "tests/build")))

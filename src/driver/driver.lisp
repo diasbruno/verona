@@ -155,11 +155,19 @@ neither value is taken from the Common Lisp host."
 (defclass compiler-driver ()
   ((search-paths :initarg :search-paths :reader compiler-driver-search-paths)
    (target :initarg :target :reader compiler-driver-target)
+   ;; LLVM's four target-machine optimization choices are intentionally kept
+   ;; at the driver boundary.  Frontend semantics remain independent of build
+   ;; policy, while clients such as the build-file layer can select it.
+   (optimization-level :initarg :optimization-level :initform :none
+                       :reader compiler-driver-optimization-level)
    (toolchain :initarg :toolchain :reader compiler-driver-toolchain)))
 
-(defun make-compiler-driver (&key (search-paths '()) target (toolchain (make-native-toolchain)))
+(defun make-compiler-driver (&key (search-paths '()) target
+                                   (optimization-level :none)
+                                   (toolchain (make-native-toolchain)))
   (make-instance 'compiler-driver :search-paths (mapcar #'pathname search-paths)
-               :target (or target (resolve-compilation-target)) :toolchain toolchain))
+               :target (or target (resolve-compilation-target))
+               :optimization-level optimization-level :toolchain toolchain))
 
 (defun artifact-class (kind)
   (ecase kind
@@ -208,7 +216,9 @@ in-memory LLVM module, verification, object emission, and toolchain handoff."
          (backend (handler-case
                       (generate-llvm program
                                      :target-configuration
-                                     (driver-target-configuration target (and picp :pic)))
+                                     (driver-target-configuration target (and picp :pic))
+                                     :optimization-level
+                                     (compiler-driver-optimization-level driver))
                     (error (condition)
                       (error 'llvm-verification-failure :message (princ-to-string condition))))))
     (when (eq artifact-kind :executable)

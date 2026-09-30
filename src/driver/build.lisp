@@ -1,0 +1,277 @@
+(in-package #:termis.compiler)
+
+;;; The build reader deliberately stops at syntax.  It reuses Termis's
+;;; source-aware S-expression reader, but no form is ever expanded or
+;;; evaluated: the objects below are configuration data only.
+
+(defstruct (build-name (:constructor make-build-name (value)))
+  "A build-target identity, separate from Termis names and modules."
+  (value "" :type string))
+
+(defun build-name= (left right)
+  (and (build-name-p left) (build-name-p right)
+       (string= (build-name-value left) (build-name-value right))))
+
+(define-condition build-error (error)
+  ((message :initarg :message :reader build-error-message)
+   (syntax :initarg :syntax :initform nil :reader build-error-syntax))
+  (:report (lambda (condition stream)
+             (let ((syntax (build-error-syntax condition)))
+               (if syntax
+                   (let ((location (termis:syntax-start syntax)))
+                     (format stream "~A:~D:~D: ~A"
+                             (termis:source-name (termis:syntax-source syntax))
+                             (termis:source-location-line location)
+                             (termis:source-location-column location)
+                             (build-error-message condition)))
+                   (write-string (build-error-message condition) stream))))))
+
+(define-condition build-parse-error (build-error) ())
+(define-condition duplicate-build-target-error (build-error) ())
+(define-condition unknown-build-option-error (build-parse-error) ())
+(define-condition unsupported-build-option-error (build-error) ())
+
+(defclass build-file ()
+  ((source :initarg :source :reader build-file-source)
+   (targets :initarg :targets :reader build-file-targets)))
+
+(defclass build-target ()
+  ((name :initarg :name :reader build-target-name)
+   (root-module :initarg :root-module :reader build-target-root-module)
+   (module-paths :initarg :module-paths :reader build-target-module-paths)
+   ;; :NATIVE is the build-language spelling `native`; strings are LLVM
+   ;; target triples.  Resolution is intentionally deferred to execution.
+   (compilation-target :initarg :compilation-target
+                       :reader build-target-compilation-target)
+   (optimization :initarg :optimization :reader build-target-optimization)
+   (link-options :initarg :link-options :reader build-target-link-options)))
+
+(defclass executable-target (build-target) ())
+(defclass static-library-target (build-target) ())
+(defclass shared-library-target (build-target) ())
+
+(defclass build-invocation ()
+  ((target-name :initarg :target-name :reader build-invocation-target-name)
+   (output-directory :initarg :output-directory
+                     :reader build-invocation-output-directory)))
+
+(defun make-build-invocation (target-name output-directory)
+  (make-instance 'build-invocation
+                 :target-name (if (build-name-p target-name)
+                                  target-name
+                                  (make-build-name target-name))
+                 :output-directory
+                 (uiop:ensure-directory-pathname
+                  (uiop:ensure-absolute-pathname (pathname output-directory)
+                                                 (uiop:getcwd)))))
+
+(defun build-fail (class syntax control &rest arguments)
+  (error class :syntax syntax :message (apply #'format nil control arguments)))
+
+(defun build-list-elements (syntax description)
+  (let ((datum (termis:syntax-datum syntax)))
+    (unless (termis:termis-list-p datum)
+      (build-fail 'build-parse-error syntax "~A must be an S-expression" description))
+    (termis:termis-list-elements datum)))
+
+(defun build-head (syntax description)
+  (let ((elements (build-list-elements syntax description)))
+    (unless elements
+      (build-fail 'build-parse-error syntax "~A must not be empty" description))
+    (let ((head (termis:syntax-datum (first elements))))
+      (unless (termis:termis-name-p head)
+        (build-fail 'build-parse-error syntax "~A head must be a name" description))
+      (termis:termis-name-value head))))
+
+(defun build-module-name (syntax)
+  (let ((datum (termis:syntax-datum syntax)))
+    (unless (termis:termis-name-p datum)
+      (build-fail 'build-parse-error syntax "root must be a module name"))
+    (let ((text (termis:termis-name-value datum)))
+      (when (or (string= text "")
+                (some (lambda (piece) (string= piece ""))
+                      (uiop:split-string text :separator ".")))
+        (build-fail 'build-parse-error syntax "root must be a dotted module name"))
+      (apply #'termis:make-module-name
+             (mapcar #'termis:make-termis-name
+                     (uiop:split-string text :separator "."))))))
+
+(defun build-string (syntax option)
+  (let ((datum (termis:syntax-datum syntax)))
+    (unless (stringp datum)
+      (build-fail 'build-parse-error syntax "~A requires a string" option))
+    datum))
+
+(defun resolve-build-directory (value directory)
+  (uiop:ensure-directory-pathname (merge-pathnames value directory)))
+
+(defun parse-build-option (option directory root target optimization
+                           module-paths libraries library-paths frameworks)
+  (let* ((elements (build-list-elements option "build option"))
+         (head (build-head option "build option"))
+         (arguments (rest elements)))
+    (labels ((one-argument ()
+               (unless (= (length arguments) 1)
+                 (build-fail 'build-parse-error option "~A requires exactly one argument" head))
+               (first arguments))
+             (duplicate-p (value option-name)
+               (when value
+                 (build-fail 'build-parse-error option "duplicate ~A option" option-name))))
+      (cond
+        ((string= head "root")
+         (duplicate-p root "root")
+         (setf root (build-module-name (one-argument))))
+        ((string= head "module-path")
+         (push (resolve-build-directory (build-string (one-argument) "module-path") directory)
+               module-paths))
+        ((string= head "target")
+         (duplicate-p target "target")
+         (let ((value (termis:syntax-datum (one-argument))))
+           (setf target
+                 (cond ((and (termis:termis-name-p value)
+                             (string= (termis:termis-name-value value) "native")) :native)
+                       ((stringp value) value)
+                       (t (build-fail 'build-parse-error option
+                                      "target requires native or a target-triple string"))))))
+        ((string= head "optimize")
+         (duplicate-p optimization "optimize")
+         (let ((value (termis:syntax-datum (one-argument))))
+           (unless (and (integerp value) (<= 0 value 3))
+             (build-fail 'build-parse-error option "optimize must be an integer from 0 through 3"))
+           (setf optimization value)))
+        ((string= head "library")
+         (push (build-string (one-argument) "library") libraries))
+        ((string= head "library-path")
+         (push (resolve-build-directory (build-string (one-argument) "library-path") directory)
+               library-paths))
+        ((string= head "framework")
+         (push (build-string (one-argument) "framework") frameworks))
+        (t (build-fail 'unknown-build-option-error option "unknown build option ~A" head))))
+    (values root target optimization module-paths libraries library-paths frameworks)))
+
+(defun artifact-target-class (head syntax)
+  (cond ((string= head "executable") 'executable-target)
+        ((string= head "static-library") 'static-library-target)
+        ((string= head "shared-library") 'shared-library-target)
+        (t (build-fail 'build-parse-error syntax "unknown top-level build form ~A" head))))
+
+(defun parse-artifact (syntax directory)
+  (let* ((elements (build-list-elements syntax "artifact declaration"))
+         (head (build-head syntax "artifact declaration"))
+         (class (artifact-target-class head syntax))
+         (arguments (rest elements)))
+    (unless (>= (length arguments) 1)
+      (build-fail 'build-parse-error syntax "~A requires a target name" head))
+    (let ((name-datum (termis:syntax-datum (first arguments))))
+      (unless (termis:termis-name-p name-datum)
+        (build-fail 'build-parse-error (first arguments) "build target name must be a name"))
+      (let ((root nil) (target nil) (optimization nil)
+            (module-paths '()) (libraries '()) (library-paths '()) (frameworks '()))
+        (dolist (option (rest arguments))
+          (multiple-value-setq (root target optimization module-paths libraries library-paths frameworks)
+            (parse-build-option option directory root target optimization module-paths
+                                libraries library-paths frameworks)))
+        (unless root
+          (build-fail 'build-parse-error syntax "~A target ~A requires exactly one root option"
+                      head (termis:termis-name-value name-datum)))
+        (make-instance class
+                       :name (make-build-name (termis:termis-name-value name-datum))
+                       :root-module root
+                       :module-paths (or (nreverse module-paths) (list directory))
+                       :compilation-target (or target :native)
+                       :optimization (or optimization 0)
+                       :link-options (make-link-options
+                                      :libraries (nreverse libraries)
+                                      :library-search-paths (nreverse library-paths)
+                                      :frameworks (nreverse frameworks)))))))
+
+(defun parse-build-source (source &key directory)
+  "Parse declarative build syntax from SOURCE without Termis evaluation."
+  (check-type source termis:source)
+  (let* ((directory (uiop:ensure-directory-pathname
+                     (or directory
+                         (uiop:pathname-directory-pathname
+                          (pathname (termis:source-name source))))))
+         (targets (mapcar (lambda (form) (parse-artifact form directory))
+                          (termis:read-source source))))
+    (let ((seen '()))
+      (dolist (target targets)
+        (when (find (build-target-name target) seen :test #'build-name=
+                    :key #'build-target-name)
+          (build-fail 'duplicate-build-target-error nil "duplicate build target ~A"
+                      (build-name-value (build-target-name target))))
+        (push target seen)))
+    (make-instance 'build-file :source source :targets targets)))
+
+(defun parse-build-file (pathname)
+  (let* ((path (pathname pathname))
+         (source (termis:source-from-file path)))
+    (parse-build-source source :directory (uiop:pathname-directory-pathname path))))
+
+(defun find-build-target (file name)
+  (let ((name (if (build-name-p name) name (make-build-name name))))
+    (find name (build-file-targets file) :key #'build-target-name :test #'build-name=)))
+
+(defun build-target-artifact-kind (target)
+  (cond ((typep target 'executable-target) :executable)
+        ((typep target 'static-library-target) :static-library)
+        ((typep target 'shared-library-target) :shared-library)
+        (t (error "unknown build target class ~S" (class-of target)))))
+
+(defun llvm-optimization-level (level)
+  (ecase level (0 :none) (1 :less) (2 :default) (3 :aggressive)))
+
+(defun resolve-build-target (target)
+  (resolve-compilation-target
+   :triple (and (stringp (build-target-compilation-target target))
+                (build-target-compilation-target target))))
+
+(defun validate-build-target (target compilation-target)
+  (when (and (link-options-frameworks (build-target-link-options target))
+             (not (eq (compilation-target-platform compilation-target) :darwin)))
+    (error 'unsupported-build-option-error
+           :message "frameworks are supported only on Darwin targets"))
+  target)
+
+(defun root-module-pathname (target)
+  (let ((filename (format nil "~A.termis"
+                         (termis:module-name-string (build-target-root-module target)))))
+    (or (find-if #'probe-file
+                 (mapcar (lambda (directory) (merge-pathnames filename directory))
+                         (build-target-module-paths target)))
+        (error 'build-error :message (format nil "cannot find root module ~A"
+                                             (termis:module-name-string
+                                              (build-target-root-module target)))))))
+
+(defun execute-build (file invocation &key toolchain)
+  "Translate FILE and INVOCATION into one CompilerDriver request."
+  (check-type file build-file)
+  (check-type invocation build-invocation)
+  (let ((target (find-build-target file (build-invocation-target-name invocation))))
+    (unless target
+      (error 'build-error :message (format nil "unknown build target ~A"
+                                           (build-name-value
+                                            (build-invocation-target-name invocation)))))
+    (let* ((compilation-target (resolve-build-target target))
+           (output-directory (build-invocation-output-directory invocation))
+           (kind (build-target-artifact-kind target)))
+      (validate-build-target target compilation-target)
+      (ensure-directories-exist (merge-pathnames ".termis-output" output-directory))
+      (let* ((root (root-module-pathname target))
+             (driver (make-compiler-driver
+                      :search-paths (build-target-module-paths target)
+                      :target compilation-target
+                      :optimization-level (llvm-optimization-level
+                                           (build-target-optimization target))
+                      :toolchain (or toolchain (make-native-toolchain))))
+             (output (default-output-path
+                      (merge-pathnames (build-name-value (build-target-name target))
+                                       output-directory)
+                      kind compilation-target)))
+        (compile-root driver root :artifact-kind kind :output output
+                      :link-options (build-target-link-options target))))))
+
+(defun locate-build-file (&optional (directory (uiop:getcwd)))
+  (let ((path (merge-pathnames "termis.build" (uiop:ensure-directory-pathname directory))))
+    (or (probe-file path)
+        (error 'build-error :message (format nil "cannot find termis.build in ~A" directory)))))

@@ -11,11 +11,20 @@
         (t (cli-fail "unknown artifact kind ~A" value))))
 
 (defun main (&optional (arguments (uiop:command-line-arguments)))
-  "Command line entry point for `termis compile SOURCE`."
+  "Command line entry point for `termis compile` and `termis build`."
   (handler-case
       (let ((command (pop arguments)))
+        (when (and command (string= command "build"))
+          (let ((target (pop arguments)) (output-directory (pop arguments)))
+            (unless target (cli-fail "usage: termis build TARGET OUTPUT-DIRECTORY"))
+            (unless output-directory (cli-fail "termis build requires an output directory"))
+            (when arguments (cli-fail "usage: termis build TARGET OUTPUT-DIRECTORY"))
+            (let ((artifact (execute-build (parse-build-file (locate-build-file))
+                                           (make-build-invocation target output-directory))))
+              (format t "~A~%" (artifact-path artifact))
+              (return-from main artifact))))
         (unless (and command (string= command "compile"))
-          (cli-fail "usage: termis compile SOURCE [-o OUTPUT] [--emit KIND]"))
+          (cli-fail "usage: termis compile SOURCE [-o OUTPUT] [--emit KIND]~%       termis build TARGET OUTPUT-DIRECTORY"))
         (let ((source (pop arguments)) (output nil) (kind :executable)
               (triple nil) (cpu "generic") (features "") (libraries '())
               (paths '()) (frameworks '()))

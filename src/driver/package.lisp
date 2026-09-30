@@ -13,7 +13,8 @@
                 #:llvm-backend-pointer-width #:llvm-backend-data-layout)
   (:export
    #:compiler-driver #:make-compiler-driver #:compiler-driver-search-paths
-   #:compiler-driver-target #:compiler-driver-toolchain
+   #:compiler-driver-target #:compiler-driver-optimization-level
+   #:compiler-driver-toolchain
    #:compilation-target #:resolve-compilation-target
    #:compilation-target-triple #:compilation-target-cpu
    #:compilation-target-features #:compilation-target-data-layout
@@ -33,4 +34,19 @@
    #:toolchain-failure #:toolchain-failure-tool #:toolchain-failure-arguments
    #:toolchain-failure-exit-status #:toolchain-failure-stdout
    #:toolchain-failure-stderr #:linker-failure #:archiver-failure
-   #:shared-library-link-failure #:main))
+   #:shared-library-link-failure
+   ;; Declarative build configuration.
+   #:build-name #:make-build-name #:build-name-p #:build-name-value #:build-name=
+   #:build-file #:build-file-source #:build-file-targets
+   #:build-target #:build-target-name #:build-target-root-module
+   #:build-target-module-paths #:build-target-compilation-target
+   #:build-target-optimization #:build-target-link-options
+   #:executable-target #:static-library-target #:shared-library-target
+   #:build-invocation #:make-build-invocation #:build-invocation-target-name
+   #:build-invocation-output-directory
+   #:parse-build-file #:parse-build-source #:find-build-target #:locate-build-file
+   #:execute-build #:build-target-artifact-kind
+   #:build-error #:build-error-message #:build-error-syntax
+   #:build-parse-error #:duplicate-build-target-error #:unknown-build-option-error
+   #:unsupported-build-option-error
+   #:main))

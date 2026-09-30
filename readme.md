@@ -79,6 +79,28 @@ is exposed to C only with an explicit top-level declaration:
 Native exports currently accept the scalar and pointer types already supported
 by `external-function`; products, sums, and `unit` remain outside the C ABI.
 
+## Declarative builds
+
+`termis.build` describes native artifacts without evaluating Termis code. The
+output directory belongs to the invocation, not the build file:
+
+```lisp
+(executable app
+  (root app.main)
+  (module-path "src")
+  (optimize 2)
+  (library "sqlite3"))
+```
+
+```sh
+bin/termis build app ./dist/bin
+```
+
+Top-level `static-library` and `shared-library` declarations use the same
+options. Build files may also declare target triples, native library paths,
+and Darwin frameworks. Relative module and library paths are resolved from the
+directory containing `termis.build`.
+
 The active tests use FiveAM. The pre-foundation C++ test sources remain in the
 repository as historical input material. The Termis programs in
 [`examples/`](examples/) use the current front-end syntax and are compiled by
