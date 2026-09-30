@@ -114,6 +114,8 @@ parameter bindings before calling this operation."
                              (semantic-error-message condition)))
                    (format stream "~A" (semantic-error-message condition)))))))
 
+(define-condition invalid-native-export (semantic-error) ())
+
 (define-condition unresolved-name-error (semantic-error)
   ((name :initarg :name :reader unresolved-name-error-name))
   (:report (lambda (condition stream)

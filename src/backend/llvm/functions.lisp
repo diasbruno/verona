@@ -50,6 +50,29 @@
           (backend-binding backend declaration) global)
     global))
 
+(defun define-native-export-wrapper (backend export)
+  "Expose one explicit C symbol while retaining Termis ABI internally."
+  (let* ((termis-function (backend-binding backend
+                                           (termis:native-export-binding-function export)))
+         (function-type (termis:semantic-function-declaration-type
+                         (termis:native-export-binding-function export)))
+         (wrapper (llvm:add-function (llvm-backend-module backend)
+                                     (termis:native-export-binding-external-name export)
+                                     (lower-type backend function-type)))
+         (block (llvm:append-basic-block wrapper "entry" :context (llvm-backend-context backend))))
+    ;; Exported functions are the first symbols with an explicit visibility
+    ;; contract.  Their Termis ABI implementation is local to this module;
+    ;; only the wrapper has the public C symbol.
+    (setf (llvm:linkage termis-function) :internal
+          (llvm:visibility termis-function) :hidden)
+    (setf (llvm:linkage wrapper) :external
+          (llvm:visibility wrapper) :default)
+    (llvm:position-builder-at-end (llvm-backend-builder backend) block)
+    (llvm:build-ret (llvm-backend-builder backend)
+                    (llvm:build-call (llvm-backend-builder backend)
+                                     termis-function (llvm:params wrapper) "termis.export"))
+    wrapper))
+
 (defun emit-global-constant (backend expression)
   "Lower the constant subset permitted in an LLVM global initializer."
   (cond ((typep expression 'termis:unit-expression)

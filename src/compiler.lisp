@@ -45,6 +45,9 @@
    (import-table :initform '() :accessor module-import-table)
    (export-names :initform '() :accessor module-export-names)
    (exports :initform '() :accessor module-exports)
+   ;; Native exports are deliberately separate from TERMIS EXPORT forms.
+   ;; Each entry is a NATIVE-EXPORT-SPEC retained until semantic resolution.
+   (native-export-specs :initform '() :accessor module-native-export-specs)
    (identity-explicit-p :initarg :identity-explicit-p :initform t
                         :reader module-identity-explicit-p)))
 
@@ -52,6 +55,11 @@
   ((module :initarg :module :reader import-module)
    (alias :initarg :alias :initform nil :reader import-alias)
    (source :initarg :source :reader import-source)))
+
+(defclass native-export-spec ()
+  ((name :initarg :name :reader native-export-spec-name)
+   (external-name :initarg :external-name :reader native-export-spec-external-name)
+   (source :initarg :source :reader native-export-spec-source)))
 
 (defclass module-loader ()
   ((search-paths :initarg :search-paths :reader module-loader-search-paths)
@@ -493,6 +501,19 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
         (error 'module-error :source name)))
     (mapcar #'syntax-datum names)))
 
+(defun parse-native-export-form (form)
+  "Parse `(native-export function-name [\"c_name\"])` without conflating it
+with a Termis module EXPORT."
+  (let ((arguments (rest (termis-list-elements (syntax-datum form)))))
+    (unless (member (length arguments) '(1 2))
+      (error 'module-error :source form))
+    (let ((name (syntax-datum (first arguments))))
+      (unless (termis-name-p name) (error 'module-error :source form))
+      (let ((external-name (if (second arguments) (syntax-datum (second arguments))
+                               (termis-name-value name))))
+        (unless (stringp external-name) (error 'module-error :source form))
+        (make-instance 'native-export-spec :name name :external-name external-name :source form)))))
+
 (defun install-imported-macros (module import)
   "Only macros cross the evaluator boundary; semantic bindings stay separate."
   (dolist (entry (module-exports (import-module import)))
@@ -538,11 +559,14 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
             ((string= (or (top-level-form-head form) "") "export")
              (setf (module-export-names module)
                    (append (module-export-names module) (parse-export-form form))))
+            ((string= (or (top-level-form-head form) "") "native-export")
+             (push (parse-native-export-form form) (module-native-export-specs module)))
             (t (dolist (expanded-syntax
                          (top-level-expansion-result-definitions
                           (expand-top-level form environment)))
                  (process-definition environment module form expanded-syntax)))))
     (resolve-module-exports module)
+    (setf (module-native-export-specs module) (nreverse (module-native-export-specs module)))
     module))
 
 (defun module-loader-find (loader name)
@@ -579,21 +603,21 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
                 (setf (module-loader-loading-stack loader) old-stack)))
             module)))))
 
-(defun compile-source (source)
+(defun compile-source (source &key target (pointer-width 64))
   (let* ((name (make-module-name (make-termis-name "string")))
          (module (make-instance 'module :name name :identity-explicit-p nil
                                 :source source :forms (read-source source)
                                 :environment (make-compilation-environment))))
     (collect-module module (make-instance 'module-loader :search-paths '()))
-    (resolve-program module (list module))
+    (resolve-program module (list module) :target target :pointer-width pointer-width)
     module))
 
-(defun compile-string (compiler contents &key (name "<string>"))
+(defun compile-string (compiler contents &key (name "<string>") target (pointer-width 64))
   "Read and discover primitive top-level declarations in CONTENTS."
   (check-type compiler compiler)
-  (compile-source (make-source name contents)))
+  (compile-source (make-source name contents) :target target :pointer-width pointer-width))
 
-(defun compile-file (compiler pathname)
+(defun compile-file (compiler pathname &key target (pointer-width 64))
   "Read and discover primitive top-level declarations in PATHNAME."
   (check-type compiler compiler)
   (let* ((path (pathname pathname))
@@ -606,10 +630,10 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
          ;; Recursive loading pushes a dependency after its importer has been
          ;; cached, so the cache's final order is already dependencies-first.
          (modules (mapcar #'cdr (module-loader-loaded-modules loader))))
-    (resolve-program entry modules)
+    (resolve-program entry modules :target target :pointer-width pointer-width)
     entry))
 
-(defun compile-module (compiler name)
+(defun compile-module (compiler name &key target (pointer-width 64))
   "Compile module NAME from COMPILER's ordered module search paths."
   (check-type compiler compiler)
   (let* ((module-name (if (module-name-p name) name
@@ -620,5 +644,5 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
          (loader (make-instance 'module-loader :search-paths (compiler-search-paths compiler)))
          (entry (module-loader-load loader module-name))
          (modules (mapcar #'cdr (module-loader-loaded-modules loader))))
-    (resolve-program entry modules)
+    (resolve-program entry modules :target target :pointer-width pointer-width)
     entry))

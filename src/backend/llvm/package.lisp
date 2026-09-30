@@ -13,6 +13,7 @@
    #:make-llvm-backend
    #:target-configuration
    #:make-target-configuration
+   #:native-target-triple
    #:target-configuration-triple
    #:target-configuration-cpu
    #:target-configuration-features
@@ -35,11 +36,13 @@
    #:emit-object
    #:emit-output
    #:build-executable
+   #:add-platform-entry-wrapper
    #:validate-executable-entry-point
    #:lower-type
    #:emit-value
    #:emit-place
    #:generate-llvm
+   #:hide-termis-symbols
    #:verify-llvm-module
    #:print-llvm-module
    #:llvm-backend-error

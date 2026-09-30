@@ -37,6 +37,23 @@
     (error (condition)
       (backend-fail "LLVM verifier rejected generated module: ~A" condition))))
 
+(defun hide-termis-symbols (backend program)
+  "Apply the driver-facing visibility boundary after all wrappers exist.
+
+ExternalFunction declarations retain their foreign linkage.  Source-defined
+functions and globals instead become module-local implementation details;
+native-export wrappers and the platform entry wrapper are the only public
+symbols created by the compiler driver."
+  (dolist (declaration (semantic-declarations program))
+    (when (or (typep declaration 'termis:semantic-function-declaration)
+              (typep declaration 'termis:semantic-generic-implementation)
+              (typep declaration 'termis:semantic-variable-declaration)
+              (typep declaration 'termis:semantic-constant-declaration))
+      (let ((value (backend-binding backend declaration)))
+        (setf (llvm:linkage value) :internal
+              (llvm:visibility value) :hidden))))
+  backend)
+
 (defun print-llvm-module (backend)
   (llvm:print-module-to-string (llvm-backend-module backend)))
 
@@ -59,5 +76,8 @@
     (declare-all backend program)
     ;; Pass two only fills initializers and bodies.
     (define-all backend program)
+    ;; Native exports are C ABI wrappers around hidden Termis ABI functions.
+    (dolist (export (termis:semantic-program-native-exports program))
+      (define-native-export-wrapper backend export))
     (verify-llvm-module backend)
     backend))

@@ -305,11 +305,17 @@ the semantic type of a unit expression remains UnitType."
    (modules :initarg :modules :initform '() :reader program-modules)
    (module-graph :initarg :module-graph :initform nil :reader program-module-graph)
    (target :initarg :target :initform nil :reader program-target)
+   (native-exports :initform '() :accessor semantic-program-native-exports)
    (module-scopes :initform '() :accessor semantic-program-module-scopes)))
 
 ;; PROGRAM is the multi-module semantic root.  It remains a SemanticProgram so
 ;; existing lowering clients continue to accept the returned object.
 (defclass program (semantic-program) ())
+
+(defclass native-export-binding ()
+  ((function :initarg :function :reader native-export-binding-function)
+   (external-name :initarg :external-name :reader native-export-binding-external-name)
+   (source :initarg :source :reader native-export-binding-source)))
 
 (defun semantic-program-module-scope-for (program module)
   (or (cdr (assoc module (semantic-program-module-scopes program) :test #'eq))
@@ -1318,6 +1324,36 @@ type checker."
                     (semantic-declaration-source-declaration declaration))
            :message "external function result must use a C ABI value type or void"))
   declaration)
+
+(defun resolve-native-exports (program modules)
+  "Resolve explicit C exports after function signatures are fully typed."
+  (let ((seen '()))
+    (dolist (module modules)
+      (dolist (spec (module-native-export-specs module))
+        (let* ((declaration (find-declaration module (native-export-spec-name spec)))
+               (semantic (and declaration (semantic-program-declaration program declaration))))
+          (unless (typep semantic 'semantic-function-declaration)
+            (error 'invalid-native-export :syntax (native-export-spec-source spec)
+                   :message "native-export must name a Termis function"))
+          (when (member (native-export-spec-external-name spec) seen :test #'string=)
+            (error 'invalid-native-export :syntax (native-export-spec-source spec)
+                   :message "duplicate native C export name"))
+          (let ((signature (semantic-function-declaration-type semantic)))
+            ;; This is the same scalar/pointer rule used by external-function,
+            ;; in the reverse direction. Unit, products, and sums have no C
+            ;; ABI contract yet.
+            (unless (and (every #'c-abi-value-type-p (function-type-parameters signature))
+                         (c-abi-value-type-p (function-type-result signature)))
+              (error 'invalid-native-export :syntax (native-export-spec-source spec)
+                     :message "native export must use C ABI value types")))
+          (push (native-export-spec-external-name spec) seen)
+          (push (make-instance 'native-export-binding :function semantic
+                               :external-name (native-export-spec-external-name spec)
+                               :source (native-export-spec-source spec))
+                (semantic-program-native-exports program)))))
+    (setf (semantic-program-native-exports program)
+          (nreverse (semantic-program-native-exports program)))
+    program))
 
 (defun compatible-p (actual expected)
   "Current non-literal compatibility rule: types must be identical."
@@ -2374,19 +2410,20 @@ the primitive model."
 		  (semantic-program-module-scope-for program (declaration-module declaration))
 		  (semantic-variable-declaration-type semantic-declaration)))))))
 
-(defun resolve-program (entry-module modules)
+(defun resolve-program (entry-module modules &key target (pointer-width 64))
   "Resolve a graph of already-loaded modules into one semantic Program.
 
 Every module has an isolated semantic scope; only QualifiedName resolution
 crosses the import/export boundary.  The shared type context makes the result
 ready for lowering as one LLVM module."
   (check-type entry-module module)
-  (let* ((type-context (make-type-context))
+  (let* ((type-context (make-type-context :pointer-width pointer-width))
 	 (bootstrap (make-bootstrap-semantic-scope type-context))
          (entry-scope (semantic-scope-child bootstrap))
 	 (program (make-instance 'program :bootstrap-scope bootstrap
 						   :module-scope entry-scope
 						   :type-context type-context
+                           :target target
                            :entry-module entry-module :modules modules
                            :module-graph
                            (make-instance 'module-graph :modules modules
@@ -2428,6 +2465,7 @@ ready for lowering as one LLVM module."
     (resolve-types program)
     (dolist (entry (semantic-program-declarations program))
       (resolve-declaration-body program (cdr entry)))
+    (resolve-native-exports program modules)
     (validate-for-backend program)
     (dolist (module modules)
       (setf (compilation-unit-semantic-program module) program))

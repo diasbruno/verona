@@ -50,6 +50,35 @@ Enter the Nix shell, then run:
 make test
 ```
 
+## Native compiler
+
+`bin/termis` is a thin command-line layer over the reusable
+`termis.compiler:compiler-driver` API.  It resolves an explicit native target
+before frontend analysis, verifies the in-memory LLVM module, emits an object,
+and delegates final linking or archiving to the host toolchain.
+
+```sh
+bin/termis compile src/app.termis -o app
+bin/termis compile src/lib.termis --emit static-library -o libtermis.a
+bin/termis compile src/lib.termis --emit shared-library -o libtermis.dylib
+```
+
+Executables require `(function main () unit ...)`; the generated platform
+wrapper returns status zero. Object files, static libraries, and shared
+libraries do not require `main`. `-L`, `-l`, and `--framework` pass native
+linker inputs through the driver (frameworks are Darwin-only).
+
+Termis-module visibility remains independent of native visibility. A function
+is exposed to C only with an explicit top-level declaration:
+
+```lisp
+(function add ((a i32) (b i32)) i32 (+ a b))
+(native-export add)             ; optional second argument: "c_symbol_name"
+```
+
+Native exports currently accept the scalar and pointer types already supported
+by `external-function`; products, sums, and `unit` remain outside the C ABI.
+
 The active tests use FiveAM. The pre-foundation C++ test sources remain in the
 repository as historical input material. The Termis programs in
 [`examples/`](examples/) use the current front-end syntax and are compiled by

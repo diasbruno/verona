@@ -10,6 +10,6 @@
   (asdf:load-asd (merge-pathnames "llvm.asd"
                                  (uiop:ensure-directory-pathname cl-llvm-root)))
   (asdf:load-asd (merge-pathnames "termis.asd" root))
-  (asdf:load-system :termis/llvm-tests)
+  (asdf:load-system :termis/compiler-tests)
   (unless (uiop:symbol-call :termis/tests :run-tests)
     (uiop:quit 1)))

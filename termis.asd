@@ -24,6 +24,14 @@
                (:file "src/backend/llvm/module")
                (:file "src/backend/llvm/codegen")))
 
+(asdf:defsystem #:termis/compiler
+  :description "Termis compiler driver and native artifact toolchain"
+  :depends-on (#:termis/backend/llvm)
+  :serial t
+  :components ((:file "src/driver/package")
+               (:file "src/driver/driver")
+               (:file "src/driver/cli")))
+
 (asdf:defsystem #:termis/tests
   :depends-on (#:termis #:fiveam)
   :serial t
@@ -37,3 +45,9 @@
   :serial t
   :components ((:file "tests/llvm-backend")
                (:file "tests/examples-llvm")))
+
+(asdf:defsystem #:termis/compiler-tests
+  :description "FiveAM tests for the Termis compiler driver"
+  :depends-on (#:termis/llvm-tests #:termis/compiler)
+  :serial t
+  :components ((:file "tests/compiler-driver")))

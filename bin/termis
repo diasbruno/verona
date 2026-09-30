@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# The command-line surface is intentionally tiny; all compiler work happens
+# in TERMIS.COMPILER and is equally available to embedding applications.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec sbcl --script "$root/src/termis.lisp" "$@"

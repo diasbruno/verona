@@ -84,6 +84,11 @@
    #:module-identity-explicit-p
    #:module-imports
    #:module-exports
+   #:module-native-export-specs
+   #:native-export-spec
+   #:native-export-spec-name
+   #:native-export-spec-external-name
+   #:native-export-spec-source
    #:module-find-export
    #:import
    #:import-module
@@ -161,6 +166,11 @@
    #:program-modules
    #:program-module-graph
    #:program-target
+   #:semantic-program-native-exports
+   #:native-export-binding
+   #:native-export-binding-function
+   #:native-export-binding-external-name
+   #:compile-source
    #:semantic-program-module-scope-for
    #:make-bootstrap-semantic-scope
    #:parameter-binding
@@ -455,6 +465,7 @@
    #:non-definition-top-level-error
    #:semantic-error
    #:semantic-error-syntax
+   #:invalid-native-export
    #:unresolved-name-error
    #:unresolved-name-error-name
    #:duplicate-local-binding-error
