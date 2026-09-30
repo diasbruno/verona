@@ -1,4 +1,4 @@
-(in-package #:termis.backend.llvm)
+(in-package #:verona.backend.llvm)
 
 (defun backend-fail (control &rest arguments)
   (error 'llvm-backend-error :message (apply #'format nil control arguments)))
@@ -16,13 +16,13 @@
    (pointer-width :initarg :pointer-width :reader llvm-backend-pointer-width)
    (type-context :initarg :type-context :accessor backend-type-context)
    ;; Semantic identities are keys.  LLVM values/types never escape into the
-   ;; Termis semantic objects themselves.
+   ;; Verona semantic objects themselves.
    (bindings :initform (make-hash-table :test #'eq)
              :reader llvm-backend-bindings)
    (types :initform (make-hash-table :test #'eq)
           :reader llvm-backend-types)))
 
-(defun make-llvm-backend (&key (module-name "termis")
+(defun make-llvm-backend (&key (module-name "verona")
                                (target-configuration (make-target-configuration))
                                (optimization-level :none))
   "Create a backend for an explicit LLVM target description.
@@ -60,19 +60,19 @@ Common Lisp implementation or the compiler host."
 (defun llvm-name (binding)
   "Mangle a semantic name so no source spelling shares generated LLVM symbols."
   (with-output-to-string (stream)
-    (write-string "__termis_" stream)
-    (let* ((source (cond ((typep binding 'termis:declaration) binding)
-                         ((typep binding 'termis:semantic-declaration)
+    (write-string "__verona_" stream)
+    (let* ((source (cond ((typep binding 'verona:declaration) binding)
+                         ((typep binding 'verona:semantic-declaration)
                           (semantic-source-binding binding))))
-           (module (and source (termis:declaration-module source))))
+           (module (and source (verona:declaration-module source))))
       ;; String compilation retains its historic spelling for compatibility;
       ;; every filename-derived module contributes its semantic identity.
-      (when (and module (termis:module-identity-explicit-p module))
-        (loop for character across (termis:module-name-string (termis:module-name module))
+      (when (and module (verona:module-identity-explicit-p module))
+        (loop for character across (verona:module-name-string (verona:module-name module))
               do (format stream "~6,'0X" (char-code character)))
         (write-string "_" stream)))
-    (loop for character across (termis:termis-name-value (termis:semantic-binding-name binding))
+    (loop for character across (verona:verona-name-value (verona:semantic-binding-name binding))
           do (format stream "~6,'0X" (char-code character)))))
 
 (defun semantic-source-binding (semantic-declaration)
-  (termis:semantic-declaration-source-declaration semantic-declaration))
+  (verona:semantic-declaration-source-declaration semantic-declaration))

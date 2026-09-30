@@ -1,4 +1,4 @@
-(in-package #:termis)
+(in-package #:verona)
 
 (defclass compiler ()
   ((search-paths :initarg :search-paths :initform '() :reader compiler-search-paths)))
@@ -45,7 +45,7 @@
    (import-table :initform '() :accessor module-import-table)
    (export-names :initform '() :accessor module-export-names)
    (exports :initform '() :accessor module-exports)
-   ;; Native exports are deliberately separate from TERMIS EXPORT forms.
+   ;; Native exports are deliberately separate from VERONA EXPORT forms.
    ;; Each entry is a NATIVE-EXPORT-SPEC retained until semantic resolution.
    (native-export-specs :initform '() :accessor module-native-export-specs)
    (identity-explicit-p :initarg :identity-explicit-p :initform t
@@ -85,34 +85,34 @@
 (defun parse-module-name (syntax)
   "Turn import syntax into a ModuleName without making ordinary names modules."
   (let ((datum (syntax-datum syntax)))
-    (unless (termis-name-p datum)
+    (unless (verona-name-p datum)
       (error 'module-error :source syntax :module nil))
-    (let ((text (termis-name-value datum)))
+    (let ((text (verona-name-value datum)))
       (when (or (string= text "")
                 (some (lambda (component) (string= component ""))
                       (uiop:split-string text :separator ".")))
         (error 'module-error :source syntax :module nil))
       (apply #'make-module-name
-             (mapcar #'make-termis-name (uiop:split-string text :separator "."))))))
+             (mapcar #'make-verona-name (uiop:split-string text :separator "."))))))
 
 (defun module-name-from-pathname (pathname)
   (let ((name (pathname-name (pathname pathname))))
     (unless name (error 'module-error :module nil))
     (parse-module-name
-     (make-syntax (make-termis-name name)
+     (make-syntax (make-verona-name name)
                   (make-source (namestring pathname) "")
                   (make-source-location) (make-source-location)))))
 
 (defun import-qualifier-name (import)
   (or (import-alias import)
-      (make-termis-name (module-name-string (module-name (import-module import))))))
+      (make-verona-name (module-name-string (module-name (import-module import))))))
 
 (defun module-find-import (module qualifier)
   (find qualifier (module-imports module) :key #'import-qualifier-name
-        :test #'termis-name=))
+        :test #'verona-name=))
 
 (defun module-find-export (module name)
-  (cdr (assoc name (module-exports module) :test #'termis-name=)))
+  (cdr (assoc name (module-exports module) :test #'verona-name=)))
 
 (defclass declaration (semantic-binding)
   (;; SOURCE is the original complete top-level form, not a resolved compiler
@@ -134,7 +134,7 @@
    (body :initarg :body :reader function-declaration-body)))
 
 ;; Foreign declarations retain their linker spelling independently from their
-;; Termis binding name.  Their signatures use the ordinary Termis type syntax.
+;; Verona binding name.  Their signatures use the ordinary Verona type syntax.
 (defclass external-function-declaration (declaration)
   ((external-name :initarg :external-name :reader external-function-declaration-external-name)
    (parameter-types :initarg :parameter-types :reader external-function-declaration-parameter-types)
@@ -188,7 +188,7 @@
                        (source-name (syntax-source syntax))
                        (source-location-line location)
                        (source-location-column location)
-                       (termis-name-value (duplicate-declaration-error-name condition))
+                       (verona-name-value (duplicate-declaration-error-name condition))
                        (source-name (syntax-source existing-source))
                        (source-location-line existing-location)
                        (source-location-column existing-location))))))
@@ -209,12 +209,12 @@ result object avoids treating an ordinary list expression as several forms."
 (defun definition-head-name (syntax)
   "Return SYNTAX's definition-form name, or NIL when it is not one."
   (let ((datum (syntax-datum syntax)))
-    (when (termis-list-p datum)
-      (let ((elements (termis-list-elements datum)))
+    (when (verona-list-p datum)
+      (let ((elements (verona-list-elements datum)))
         (when elements
           (let ((head (syntax-datum (first elements))))
-            (and (termis-name-p head)
-                 (find (termis-name-value head) +definition-form-names+
+            (and (verona-name-p head)
+                 (find (verona-name-value head) +definition-form-names+
                        :test #'string=))))))))
 
 (defun definition-form-p (syntax)
@@ -229,13 +229,13 @@ result object avoids treating an ordinary list expression as several forms."
 
 (defun definition-name (syntax name-syntax)
   (let ((name (syntax-datum name-syntax)))
-    (unless (termis-name-p name)
-      (definition-fail syntax "definition name must be a Termis name"))
+    (unless (verona-name-p name)
+      (definition-fail syntax "definition name must be a Verona name"))
     name))
 
 (defun definition-elements (syntax expected-name minimum-arguments)
   "Return definition arguments after validating the primitive form's arity."
-  (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
+  (let ((arguments (rest (verona-list-elements (syntax-datum syntax)))))
     (when (< (length arguments) minimum-arguments)
       (definition-fail syntax "%~A requires at least ~D argument~:P"
                        expected-name minimum-arguments))
@@ -248,8 +248,8 @@ The primary value is the declaration (or NIL); the secondary value says
 whether the name was present, so a future NIL-valued representation remains
 unambiguous."
   (check-type unit compilation-unit)
-  (check-type name termis-name)
-  (let ((binding (assoc name (compilation-unit-namespace unit) :test #'termis-name=)))
+  (check-type name verona-name)
+  (let ((binding (assoc name (compilation-unit-namespace unit) :test #'verona-name=)))
     (values (cdr binding) (not (null binding)))))
 
 (defun module-lookup (module name)
@@ -285,32 +285,32 @@ unambiguous."
 
 (defun macro-parameter-names (definition parameters)
   "Extract macro parameter names while retaining the parameter syntax itself."
-  (unless (termis-list-p (syntax-datum parameters))
+  (unless (verona-list-p (syntax-datum parameters))
     (definition-fail definition "%macro parameters must be a list"))
   (mapcar (lambda (parameter)
             (let ((name (syntax-datum parameter)))
-              (unless (termis-name-p name)
-                (definition-fail definition "%macro parameters must be Termis names"))
+              (unless (verona-name-p name)
+                (definition-fail definition "%macro parameters must be Verona names"))
               name))
-          (termis-list-elements (syntax-datum parameters))))
+          (verona-list-elements (syntax-datum parameters))))
 
 (defun generic-parameter-names (definition parameters)
   "Extract the untyped parameter names that establish a generic's arity."
-  (unless (termis-list-p (syntax-datum parameters))
+  (unless (verona-list-p (syntax-datum parameters))
     (definition-fail definition "%generic parameters must be a list"))
   (mapcar (lambda (parameter)
             (let ((name (syntax-datum parameter)))
-              (unless (termis-name-p name)
-                (definition-fail definition "%generic parameters must be Termis names"))
+              (unless (verona-name-p name)
+                (definition-fail definition "%generic parameters must be Verona names"))
               name))
-          (termis-list-elements (syntax-datum parameters))))
+          (verona-list-elements (syntax-datum parameters))))
 
 (defun declaration-macro (definition parameter-names body environment)
   "Construct the compile-time macro represented by a %MACRO declaration.
 
 Macro bodies are evaluated only when the macro is invoked.  Discovery itself
 never evaluates a declaration body."
-  (make-termis-macro
+  (make-verona-macro
    (lambda (&rest arguments)
      (unless (= (length arguments) (length parameter-names))
        (definition-fail definition
@@ -365,12 +365,12 @@ expands syntax; this processor is the boundary that creates compiler objects."
              (let ((arguments (definition-elements expanded-syntax "external-function" 4)))
                (unless (= (length arguments) 4)
                  (definition-fail expanded-syntax
-                                  "%external-function requires a Termis name, external string name, parameter type list, and result type"))
+                                  "%external-function requires a Verona name, external string name, parameter type list, and result type"))
                (let ((external-name (syntax-datum (second arguments)))
                      (parameter-types (third arguments)))
                  (unless (stringp external-name)
                    (definition-fail expanded-syntax "external function name must be a string"))
-                 (unless (termis-list-p (syntax-datum parameter-types))
+                 (unless (verona-list-p (syntax-datum parameter-types))
                    (definition-fail expanded-syntax "external function parameter types must be a list"))
                  (make-declaration 'external-function-declaration
                                    (definition-name expanded-syntax (first arguments))
@@ -420,7 +420,7 @@ expands syntax; this processor is the boundary that creates compiler objects."
                (unless (= (length arguments) 4)
                  (definition-fail expanded-syntax "%implementation requires a generic name, parameters, return type, and body"))
                (let ((target (syntax-datum (first arguments))))
-                 (unless (or (termis-name-p target) (qualified-name-p target))
+                 (unless (or (verona-name-p target) (qualified-name-p target))
                    (definition-fail expanded-syntax "implementation target must be a name"))
                  ;; Implementations do not occupy the ordinary declaration
                  ;; namespace.  Keep a local Name for diagnostics while
@@ -446,8 +446,8 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
                (if (not macro)
                    (list form)
                    (let ((result (let ((*macro-expansion-syntax* form))
-                                   (apply (termis-macro-implementation macro)
-                                          (rest (termis-list-elements
+                                   (apply (verona-macro-implementation macro)
+                                          (rest (verona-list-elements
                                                  (syntax-datum form)))))))
                      (cond ((typep result 'syntax) (expand-one result))
                            ((typep result 'top-level-expansion-result)
@@ -462,10 +462,10 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
   (let ((environment (make-bootstrap-environment)))
     ;; This internal helper is deliberately available only during compilation.
     ;; It gives source-defined macros a precise way to emit zero or more
-    ;; definitions without giving an ordinary Termis list a second meaning.
+    ;; definitions without giving an ordinary Verona list a second meaning.
     (environment-bind
-     environment (make-termis-name "definitions")
-     (make-termis-function
+     environment (make-verona-name "definitions")
+     (make-verona-function
       (lambda (&rest definitions)
         (dolist (definition definitions)
           (check-type definition syntax))
@@ -474,43 +474,43 @@ TOP-LEVEL-EXPANSION-RESULT containing zero or more definition forms."
 
 (defun top-level-form-head (form)
   (let ((datum (syntax-datum form)))
-    (when (termis-list-p datum)
-      (let ((head (first (termis-list-elements datum))))
-        (and head (termis-name-p (syntax-datum head))
-             (termis-name-value (syntax-datum head)))))))
+    (when (verona-list-p datum)
+      (let ((head (first (verona-list-elements datum))))
+        (and head (verona-name-p (syntax-datum head))
+             (verona-name-value (syntax-datum head)))))))
 
 (defun parse-import-form (form loader)
-  (let ((arguments (rest (termis-list-elements (syntax-datum form)))))
+  (let ((arguments (rest (verona-list-elements (syntax-datum form)))))
     (unless (or (= (length arguments) 1) (= (length arguments) 3))
       (error 'module-error :source form))
     (let ((name (parse-module-name (first arguments)))
           (alias nil))
       (when (= (length arguments) 3)
-        (unless (and (termis-name-p (syntax-datum (second arguments)))
-                     (string= (termis-name-value (syntax-datum (second arguments))) ":as")
-                     (termis-name-p (syntax-datum (third arguments))))
+        (unless (and (verona-name-p (syntax-datum (second arguments)))
+                     (string= (verona-name-value (syntax-datum (second arguments))) ":as")
+                     (verona-name-p (syntax-datum (third arguments))))
           (error 'module-error :source form))
         (setf alias (syntax-datum (third arguments))))
       (make-instance 'import :module (module-loader-load loader name)
                             :alias alias :source form))))
 
 (defun parse-export-form (form)
-  (let ((names (rest (termis-list-elements (syntax-datum form)))))
+  (let ((names (rest (verona-list-elements (syntax-datum form)))))
     (dolist (name names)
-      (unless (termis-name-p (syntax-datum name))
+      (unless (verona-name-p (syntax-datum name))
         (error 'module-error :source name)))
     (mapcar #'syntax-datum names)))
 
 (defun parse-native-export-form (form)
   "Parse `(native-export function-name [\"c_name\"])` without conflating it
-with a Termis module EXPORT."
-  (let ((arguments (rest (termis-list-elements (syntax-datum form)))))
+with a Verona module EXPORT."
+  (let ((arguments (rest (verona-list-elements (syntax-datum form)))))
     (unless (member (length arguments) '(1 2))
       (error 'module-error :source form))
     (let ((name (syntax-datum (first arguments))))
-      (unless (termis-name-p name) (error 'module-error :source form))
+      (unless (verona-name-p name) (error 'module-error :source form))
       (let ((external-name (if (second arguments) (syntax-datum (second arguments))
-                               (termis-name-value name))))
+                               (verona-name-value name))))
         (unless (stringp external-name) (error 'module-error :source form))
         (make-instance 'native-export-spec :name name :external-name external-name :source form)))))
 
@@ -520,10 +520,10 @@ with a Termis module EXPORT."
     (let ((declaration (cdr entry)))
       (when (typep declaration 'macro-declaration)
         (let ((local-name
-                (make-termis-name
+                (make-verona-name
                  (format nil "~A:~A"
-                         (termis-name-value (import-qualifier-name import))
-                         (termis-name-value (car entry))))))
+                         (verona-name-value (import-qualifier-name import))
+                         (verona-name-value (car entry))))))
           (multiple-value-bind (value foundp)
               (environment-find (module-environment (import-module import))
                                 (car entry))
@@ -573,7 +573,7 @@ with a Termis module EXPORT."
   (cdr (assoc name (module-loader-loaded-modules loader) :test #'module-name=)))
 
 (defun module-source-pathname (loader name)
-  (let ((filename (format nil "~A.termis" (module-name-string name))))
+  (let ((filename (format nil "~A.vrn" (module-name-string name))))
     (find-if #'probe-file
              (mapcar (lambda (root) (merge-pathnames filename root))
                      (module-loader-search-paths loader)))))
@@ -604,7 +604,7 @@ with a Termis module EXPORT."
             module)))))
 
 (defun compile-source (source &key target (pointer-width 64))
-  (let* ((name (make-module-name (make-termis-name "string")))
+  (let* ((name (make-module-name (make-verona-name "string")))
          (module (make-instance 'module :name name :identity-explicit-p nil
                                 :source source :forms (read-source source)
                                 :environment (make-compilation-environment))))
@@ -638,7 +638,7 @@ with a Termis module EXPORT."
   (check-type compiler compiler)
   (let* ((module-name (if (module-name-p name) name
                           (parse-module-name
-                           (make-syntax (make-termis-name name)
+                           (make-syntax (make-verona-name name)
                                         (make-source "<module>" "")
                                         (make-source-location) (make-source-location)))))
          (loader (make-instance 'module-loader :search-paths (compiler-search-paths compiler)))

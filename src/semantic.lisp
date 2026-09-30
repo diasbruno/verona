@@ -1,4 +1,4 @@
-(in-package #:termis)
+(in-package #:verona)
 
 ;;; The compile-time ENVIRONMENT and the semantic objects in this file are
 ;;; deliberately unrelated.  ENVIRONMENT contains evaluator values and
@@ -61,15 +61,15 @@
 (defun semantic-scope-local-find (scope name)
   "Return the binding local to SCOPE for NAME, plus a presence flag."
   (check-type scope semantic-scope)
-  (check-type name termis-name)
+  (check-type name verona-name)
   (let ((entry (assoc name (semantic-scope-bindings scope)
-                      :test #'termis-name=)))
+                      :test #'verona-name=)))
     (values (cdr entry) (not (null entry)))))
 
 (defun semantic-scope-find (scope name)
   "Find NAME in SCOPE or one of its semantic parents."
   (check-type scope semantic-scope)
-  (check-type name termis-name)
+  (check-type name verona-name)
   (loop for current = scope then (semantic-scope-parent current)
         while current
         do (multiple-value-bind (binding foundp)
@@ -85,9 +85,9 @@ The scope itself permits replacement so clients that need a different
 shadowing policy can implement it explicitly.  The resolver rejects duplicate
 parameter bindings before calling this operation."
   (check-type scope semantic-scope)
-  (check-type name termis-name)
+  (check-type name verona-name)
   (let ((entry (assoc name (semantic-scope-bindings scope)
-                      :test #'termis-name=)))
+                      :test #'verona-name=)))
     (if entry
         (setf (cdr entry) binding)
         (push (cons name binding) (semantic-scope-bindings scope)))
@@ -126,10 +126,10 @@ parameter bindings before calling this operation."
                              (source-name (syntax-source syntax))
                              (source-location-line location)
                              (source-location-column location)
-                             (termis-name-value
+                             (verona-name-value
                               (unresolved-name-error-name condition))))
                    (format stream "unknown name `~A`"
-                           (termis-name-value
+                           (verona-name-value
                             (unresolved-name-error-name condition))))))))
 
 (define-condition duplicate-local-binding-error (semantic-error)
@@ -143,10 +143,10 @@ parameter bindings before calling this operation."
                              (source-name (syntax-source syntax))
                              (source-location-line location)
                              (source-location-column location)
-                             (termis-name-value
+                             (verona-name-value
                               (duplicate-local-binding-error-name condition))))
                    (format stream "duplicate local binding `~A`"
-                           (termis-name-value
+                           (verona-name-value
                            (duplicate-local-binding-error-name condition))))))))
 
 ;; Declarations are collected by the compilation-unit processor.  This keeps

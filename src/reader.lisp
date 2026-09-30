@@ -1,16 +1,16 @@
-(in-package #:termis)
+(in-package #:verona)
 
-(define-condition termis-read-error (error)
-  ((source :initarg :source :reader termis-read-error-source)
-   (location :initarg :location :reader termis-read-error-location)
-   (message :initarg :message :reader termis-read-error-message))
+(define-condition verona-read-error (error)
+  ((source :initarg :source :reader verona-read-error-source)
+   (location :initarg :location :reader verona-read-error-location)
+   (message :initarg :message :reader verona-read-error-message))
   (:report (lambda (condition stream)
-             (let ((location (termis-read-error-location condition)))
+             (let ((location (verona-read-error-location condition)))
                (format stream "~A:~D:~D: ~A"
-                       (source-name (termis-read-error-source condition))
+                       (source-name (verona-read-error-source condition))
                        (source-location-line location)
                        (source-location-column location)
-                       (termis-read-error-message condition))))))
+                       (verona-read-error-message condition))))))
 
 (defstruct (reader-state (:constructor make-reader-state (source)))
   source
@@ -34,22 +34,22 @@
   (source-location-at (reader-state-source state) (reader-state-offset state)))
 
 (defun reader-fail (state message &optional (offset (reader-state-offset state)))
-  (error 'termis-read-error
+  (error 'verona-read-error
          :source (reader-state-source state)
          :location (source-location-at (reader-state-source state) offset)
          :message message))
 
-(defun termis-whitespace-p (character)
+(defun verona-whitespace-p (character)
   (and character
        (member character '(#\Space #\Tab #\Newline #\Return) :test #'char=)))
 
-(defun termis-delimiter-p (character)
+(defun verona-delimiter-p (character)
   (or (null character)
-      (termis-whitespace-p character)
+      (verona-whitespace-p character)
       (find character "()\"" :test #'char=)))
 
 (defun skip-whitespace (state)
-  (loop while (termis-whitespace-p (reader-peek state))
+  (loop while (verona-whitespace-p (reader-peek state))
         do (reader-advance state)))
 
 (defun decimal-digits-p (text start end)
@@ -81,7 +81,7 @@
     (labels ((finish-component (end)
                (when (= component-start end)
                  (reader-fail state "module name contains an empty component" start))
-               (push (make-termis-name (subseq text component-start end)) components)))
+               (push (make-verona-name (subseq text component-start end)) components)))
       (loop for index from 0 below (length text)
             when (char= (char text index) #\.)
               do (finish-component index) (setf component-start (1+ index)))
@@ -100,12 +100,12 @@
         (reader-fail state "the member of a qualified name must be a name" start))
       (make-qualified-name
        (read-module-name-text state (subseq text 0 separator) start)
-       (make-termis-name member)))))
+       (make-verona-name member)))))
 
 (defun read-atom (state start)
   (let ((text (with-output-to-string (output)
                 (loop for character = (reader-peek state)
-                      until (termis-delimiter-p character)
+                      until (verona-delimiter-p character)
                       do (write-char (reader-advance state) output)))))
     (when (string= text "")
       (reader-fail state "expected a form" start))
@@ -114,8 +114,8 @@
            ;; only inhabitant.  The semantic phase assigns its meaning from
            ;; context; the reader records the atom without host symbols.
            (make-unit-literal))
-          ((string= text "true") (make-termis-boolean-literal t))
-          ((string= text "false") (make-termis-boolean-literal nil))
+          ((string= text "true") (make-verona-boolean-literal t))
+          ((string= text "false") (make-verona-boolean-literal nil))
           ((integer-literal-p text)
            (handler-case
                (parse-integer text)
@@ -124,7 +124,7 @@
            ;; The grammar has no exponent notation; appending D0 makes the
            ;; resulting Common Lisp number the language's f64 representation.
            (read-from-string (concatenate 'string text "d0")))
-          ((string= text ":as") (make-termis-name text))
+          ((string= text ":as") (make-verona-name text))
           ((find #\: text) (read-qualified-name-text state text start))
           ((find #\. text)
            ;; Dots are meaningful only when an enclosing grammar production
@@ -132,8 +132,8 @@
            ;; validates it as a ModuleName later.
            (if (some #'digit-char-p text)
                (reader-fail state "invalid numeric literal" start)
-               (make-termis-name text)))
-          (t (make-termis-name text)))))
+               (make-verona-name text)))
+          (t (make-verona-name text)))))
 
 (defun read-string-literal (state start)
   (reader-advance state)
@@ -165,7 +165,7 @@
                 (reader-fail state "unterminated list" start))
               (when (char= (reader-peek state) #\))
                 (reader-advance state)
-                (return (apply #'make-termis-list (nreverse elements))))
+                (return (apply #'make-verona-list (nreverse elements))))
               (push (read-form state) elements))))
 
 (defun read-form (state)
@@ -185,7 +185,7 @@
                   (if (and (< (1+ start) (length (reader-contents state)))
                            (digit-char-p (char (reader-contents state) (1+ start))))
                       (reader-fail state "floating-point literals must start with a digit")
-                      (reader-fail state "'.' is not valid Termis syntax; use `unit`" start)))
+                      (reader-fail state "'.' is not valid Verona syntax; use `unit`" start)))
                  (t (read-atom state start)))))
     (make-instance 'syntax
                    :datum datum

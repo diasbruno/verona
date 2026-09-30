@@ -1,4 +1,4 @@
-(in-package #:termis)
+(in-package #:verona)
 
 ;;; This file is the syntax-to-semantics boundary.  It first records binding
 ;;; identity, then turns executable syntax into typed runtime expressions.
@@ -12,29 +12,29 @@
 
 ;;; Types are compiler semantics, deliberately independent from any lowering
 ;;; target.  In particular, BOOLEAN-TYPE does not imply an LLVM integer type.
-(defclass termis-type () ())
+(defclass verona-type () ())
 
-(defclass unit-type (termis-type) ())
-(defclass void-type (termis-type) ())
-(defclass never-type (termis-type) ())
+(defclass unit-type (verona-type) ())
+(defclass void-type (verona-type) ())
+(defclass never-type (verona-type) ())
 ;; UNIT-VALUE is deliberately an object rather than the host value NIL.  A
 ;; type context allocates exactly one of these objects, making the singleton
-;; nature of Termis unit visible to later compiler stages without conflating it
+;; nature of Verona unit visible to later compiler stages without conflating it
 ;; with void or an integer zero.
 (defclass unit-value () ())
-(defclass boolean-type (termis-type) ())
-(defclass string-type (termis-type) ())
-(defclass integer-type (termis-type)
+(defclass boolean-type (verona-type) ())
+(defclass string-type (verona-type) ())
+(defclass integer-type (verona-type)
   ((signed :initarg :signed :reader integer-type-signed)
    (width :initarg :width :reader integer-type-width)))
-(defclass float-type (termis-type)
+(defclass float-type (verona-type)
   ((width :initarg :width :reader float-type-width)))
-(defclass pointer-type (termis-type)
+(defclass pointer-type (verona-type)
   ((target :initarg :target :reader pointer-type-target :reader pointer-type-pointee)))
-(defclass function-type (termis-type)
+(defclass function-type (verona-type)
   ((parameters :initarg :parameters :reader function-type-parameters)
    (result :initarg :result :reader function-type-result)))
-(defclass defined-type (termis-type)
+(defclass defined-type (verona-type)
   ((declaration :initarg :declaration :reader defined-type-declaration)))
 
 ;; A product retains its declaration identity through DEFINED-TYPE while also
@@ -77,9 +77,9 @@
    (defined-types :initform '() :accessor type-context-defined-types)))
 
 (defun make-type-context (&key (pointer-width 64))
-  "Create the canonical Termis types for one semantic program."
+  "Create the canonical Verona types for one semantic program."
   (unless (member pointer-width '(32 64))
-    (error "Termis currently supports 32-bit and 64-bit pointer targets, not ~S"
+    (error "Verona currently supports 32-bit and 64-bit pointer targets, not ~S"
            pointer-width))
   (let ((context (make-instance 'type-context)))
     (setf (slot-value context 'unit-type) (make-instance 'unit-type)
@@ -126,7 +126,7 @@ the semantic type of a unit expression remains UnitType."
 
 (defun type-context-pointer-type (context target)
   "Return the canonical pointer-to-TARGET type in CONTEXT."
-  (check-type target termis-type)
+  (check-type target verona-type)
   (or (cdr (assoc target (type-context-pointer-types context) :test #'eq))
       (let ((type (make-instance 'pointer-type :target target)))
 	(push (cons target type) (type-context-pointer-types context))
@@ -135,8 +135,8 @@ the semantic type of a unit expression remains UnitType."
 (defun type-context-function-type (context parameters result)
   "Return the canonical function type with PARAMETERS and RESULT in CONTEXT."
   (dolist (parameter parameters)
-    (check-type parameter termis-type))
-  (check-type result termis-type)
+    (check-type parameter verona-type))
+  (check-type result verona-type)
   (let ((key (cons parameters result)))
     (or (cdr (assoc key (type-context-function-types context) :test #'equal))
 	(let ((type (make-instance 'function-type
@@ -168,7 +168,7 @@ the semantic type of a unit expression remains UnitType."
 
 ;;; Concrete primitive operations -----------------------------------------
 
-;; A primitive operation is a Termis semantic entity.  Its KIND is the
+;; A primitive operation is a Verona semantic entity.  Its KIND is the
 ;; complete operation selection the LLVM backend will later translate; it is
 ;; never reconstructed from NAME or from operand types.
 (defclass primitive-operation ()
@@ -213,7 +213,7 @@ the semantic type of a unit expression remains UnitType."
   ((declaration :initarg :declaration :initform nil :reader generic-declaration)
    (name :initarg :name :reader generic-name)
    (arity :initarg :arity :reader generic-arity)
-   ;; Keys are lists of canonical TERMIS-TYPE objects.  EQUAL is intentional:
+   ;; Keys are lists of canonical VERONA-TYPE objects.  EQUAL is intentional:
    ;; standard objects compare by identity, never by their printed spelling.
    (implementations :initform '() :accessor generic-implementations)))
 
@@ -254,7 +254,7 @@ the semantic type of a unit expression remains UnitType."
 (defun make-primitive-binding (context name parameter-types result-type kind
 				     &key nan-semantics class)
   (let* ((operation (make-instance 'primitive-operation
-					  :name (make-termis-name name)
+					  :name (make-verona-name name)
 					  :parameter-types parameter-types
 					  :result-type result-type :kind kind
 					  :nan-semantics nan-semantics))
@@ -266,7 +266,7 @@ the semantic type of a unit expression remains UnitType."
     binding))
 
 ;;; These nodes retain the resolved structure of compound type syntax until
-;;; the type pass turns them into TERMIS-TYPE objects.  A bare type name stays
+;;; the type pass turns them into VERONA-TYPE objects.  A bare type name stays
 ;;; a SEMANTIC-REFERENCE, preserving the established representation and API.
 (defclass semantic-type-syntax ()
   ((syntax :initarg :syntax :reader semantic-type-syntax-syntax)))
@@ -493,9 +493,9 @@ than recovered later through ad-hoc string comparisons."
   (let ((scope (make-semantic-scope)))
     (setf (semantic-scope-type-context scope) type-context)
     (flet ((bind-type (name type)
-	     (semantic-scope-bind scope (make-termis-name name)
+	     (semantic-scope-bind scope (make-verona-name name)
 				  (make-instance 'builtin-type-declaration
-						 :name (make-termis-name name)
+						 :name (make-verona-name name)
 						 :type type))))
       (bind-type "bool" (type-context-boolean-type type-context))
       (bind-type "string" (type-context-string-type type-context))
@@ -516,7 +516,7 @@ than recovered later through ad-hoc string comparisons."
     (labels ((bind (name parameters result kind &key nan-semantics class)
 	       (let ((binding (make-primitive-binding type-context name parameters result kind
 							 :nan-semantics nan-semantics :class class)))
-		 (semantic-scope-bind scope (make-termis-name name) binding)))
+		 (semantic-scope-bind scope (make-verona-name name) binding)))
 	     (integer-name (type)
 	       (format nil "~:[u~;i~]~D" (integer-type-signed type)
 		       (integer-type-width type)))
@@ -617,7 +617,7 @@ than recovered later through ad-hoc string comparisons."
       ;; older concrete i32 aliases above remain available as primitives for
       ;; bootstrap code and backwards compatibility.
       (labels ((install (name arity)
-                 (let ((generic (make-instance 'generic :name (make-termis-name name)
+                 (let ((generic (make-instance 'generic :name (make-verona-name name)
                                                  :arity arity)))
                    (semantic-scope-bind scope (generic-name generic)
                                         (make-instance 'generic-binding
@@ -626,7 +626,7 @@ than recovered later through ad-hoc string comparisons."
                    generic))
                (primitive (name)
                  (primitive-binding-operation
-                  (semantic-scope-lookup scope (make-termis-name name))))
+                  (semantic-scope-lookup scope (make-verona-name name))))
                (add (generic name)
                  (let ((operation (primitive name)))
                    (generic-add-implementation
@@ -688,7 +688,7 @@ than recovered later through ad-hoc string comparisons."
 (defun resolve-qualified-name (scope syntax name)
   (let* ((current (semantic-scope-owning-module scope))
          (program (semantic-scope-owning-program scope))
-         (qualifier (make-termis-name (module-name-string
+         (qualifier (make-verona-name (module-name-string
                                        (qualified-name-qualifier name))))
          (import (and current (module-find-import current qualifier))))
     (unless import
@@ -716,12 +716,12 @@ than recovered later through ad-hoc string comparisons."
   "Resolve local and qualified names through deliberately separate paths."
   (let ((name (syntax-datum syntax)))
     (cond ((qualified-name-p name) (resolve-qualified-name scope syntax name))
-          ((termis-name-p name)
+          ((verona-name-p name)
            (multiple-value-bind (binding foundp) (semantic-scope-find scope name)
              (unless foundp
                (error 'unresolved-name-error :name name :syntax syntax))
              (make-instance 'semantic-reference :syntax syntax :name name :binding binding)))
-          (t (error 'semantic-error :syntax syntax :message "expected a Termis name")))))
+          (t (error 'semantic-error :syntax syntax :message "expected a Verona name")))))
 
 (defun build-semantic-expression (scope syntax)
   "Build a resolved expression from syntax in SCOPE.
@@ -732,9 +732,9 @@ without changing the scope or binding model established here."
   (check-type scope semantic-scope)
   (check-type syntax syntax)
   (let ((datum (syntax-datum syntax)))
-    (cond ((or (termis-name-p datum) (qualified-name-p datum)) (resolve-name scope syntax))
-	  ((termis-list-p datum)
-	   (let ((elements (termis-list-elements datum)))
+    (cond ((or (verona-name-p datum) (qualified-name-p datum)) (resolve-name scope syntax))
+	  ((verona-list-p datum)
+	   (let ((elements (verona-list-elements datum)))
 	     (unless elements
 	       (error 'semantic-error :syntax syntax
 				      :message "an empty list is not an expression"))
@@ -751,21 +751,21 @@ without changing the scope or binding model established here."
 
 This is deliberately distinct from BUILD-SEMANTIC-EXPRESSION: POINTER is a
 type constructor, never a runtime call.  The result is still syntax-shaped so
-the following type pass can turn it into canonical TERMIS-TYPE objects."
+the following type pass can turn it into canonical VERONA-TYPE objects."
   (check-type scope semantic-scope)
   (check-type syntax syntax)
   (let ((datum (syntax-datum syntax)))
-    (cond ((or (termis-name-p datum) (qualified-name-p datum)) (resolve-name scope syntax))
+    (cond ((or (verona-name-p datum) (qualified-name-p datum)) (resolve-name scope syntax))
 	  ((unit-literal-p datum)
 	   (make-instance 'semantic-unit-type-syntax :syntax syntax))
-	  ((termis-list-p datum)
-	   (let ((elements (termis-list-elements datum)))
+	  ((verona-list-p datum)
+	   (let ((elements (verona-list-elements datum)))
 	     (unless (= (length elements) 2)
 	       (error 'semantic-error :syntax syntax
 				      :message "a type constructor requires exactly one argument"))
 	     (let ((head (syntax-datum (first elements))))
-	       (unless (and (termis-name-p head)
-			    (string= (termis-name-value head) "pointer"))
+	       (unless (and (verona-name-p head)
+			    (string= (verona-name-value head) "pointer"))
 		 (error 'semantic-error :syntax (first elements)
 					:message "unknown type constructor"))
 	       (make-instance 'semantic-pointer-type-syntax
@@ -780,9 +780,9 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 	     (let* ((syntax (semantic-error-syntax condition))
 		    (name (and (typep syntax 'syntax)
 			       (syntax-datum syntax))))
-	       (if (termis-name-p name)
+	       (if (verona-name-p name)
 		   (format stream "~A is not a type"
-			   (termis-name-value name))
+			   (verona-name-value name))
            (format stream "expected a type"))))))
 
 (define-condition duplicate-field-error (semantic-error)
@@ -805,17 +805,17 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 (defun product-type-find-field (product-type name)
   "Return PRODUCT-TYPE's field named NAME, plus a presence flag."
   (check-type product-type product-type)
-  (check-type name termis-name)
+  (check-type name verona-name)
   (let ((field (find name (product-type-fields product-type)
-                     :key #'product-field-name :test #'termis-name=)))
+                     :key #'product-field-name :test #'verona-name=)))
     (values field (not (null field)))))
 
 (defun sum-type-find-alternative (sum-type name)
   "Return SUM-TYPE's alternative named NAME, plus a presence flag."
   (check-type sum-type sum-type)
-  (check-type name termis-name)
+  (check-type name verona-name)
   (let ((alternative (find name (sum-type-alternatives sum-type)
-                           :key #'sum-alternative-name :test #'termis-name=)))
+                           :key #'sum-alternative-name :test #'verona-name=)))
     (values alternative (not (null alternative)))))
 
 (defun resolve-type (type-context resolved-type-syntax)
@@ -842,17 +842,17 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 (defun parse-parameter (function parameter-syntax)
   "Create a parameter entity from one (name type) syntax form."
   (declare (ignore function))
-  (unless (termis-list-p (syntax-datum parameter-syntax))
+  (unless (verona-list-p (syntax-datum parameter-syntax))
     (error 'semantic-error :syntax parameter-syntax
 			   :message "function parameter must be a (name type) list"))
-  (let ((elements (termis-list-elements (syntax-datum parameter-syntax))))
+  (let ((elements (verona-list-elements (syntax-datum parameter-syntax))))
     (unless (= (length elements) 2)
       (error 'semantic-error :syntax parameter-syntax
 			     :message "function parameter must contain a name and type"))
     (let ((name (syntax-datum (first elements))))
-      (unless (termis-name-p name)
+      (unless (verona-name-p name)
 	(error 'semantic-error :syntax (first elements)
-			       :message "function parameter name must be a Termis name"))
+			       :message "function parameter name must be a Verona name"))
       (make-instance 'parameter-binding
 		     :name name :syntax (first elements) :type-syntax (second elements)))))
 
@@ -860,13 +860,13 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
   (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
 	 (module-scope (semantic-program-module-scope-for program (declaration-module declaration)))
 	 (parameters-syntax (function-declaration-parameters declaration)))
-    (unless (termis-list-p (syntax-datum parameters-syntax))
+    (unless (verona-list-p (syntax-datum parameters-syntax))
       (error 'semantic-error :syntax parameters-syntax
 			     :message "function parameters must be a list"))
     (let ((scope (semantic-scope-child module-scope))
 	  (parameters
 	    (mapcar (lambda (syntax) (parse-parameter declaration syntax))
-		    (termis-list-elements (syntax-datum parameters-syntax)))))
+		    (verona-list-elements (syntax-datum parameters-syntax)))))
       ;; Parameter types are interface names, and so resolve in the module
       ;; scope.  Binding parameters afterward avoids accidental access to a
       ;; preceding parameter while interpreting this still-untyped syntax.
@@ -890,14 +890,14 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
 			 (function-declaration-return-type declaration))))))
 
 (defun resolve-external-function-signature (program semantic-declaration)
-  "Resolve an external declaration with ordinary Termis types only."
+  "Resolve an external declaration with ordinary Verona types only."
   (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
          (module-scope (semantic-program-module-scope-for program
                                                             (declaration-module declaration)))
          (parameter-syntax (external-function-declaration-parameter-types declaration)))
     (setf (semantic-external-function-declaration-parameter-type-references semantic-declaration)
           (mapcar (lambda (syntax) (resolve-type-syntax module-scope syntax))
-                  (termis-list-elements (syntax-datum parameter-syntax)))
+                  (verona-list-elements (syntax-datum parameter-syntax)))
           (semantic-external-function-declaration-result-type-reference semantic-declaration)
           (resolve-type-syntax module-scope
                                (external-function-declaration-result-type declaration)))))
@@ -919,10 +919,10 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
                   (declaration-module (generic-declaration generic)))
         (error 'semantic-error :syntax (declaration-source declaration)
                :message "generic implementations must belong to the defining module"))
-      (unless (termis-list-p (syntax-datum parameters-syntax))
+      (unless (verona-list-p (syntax-datum parameters-syntax))
         (error 'semantic-error :syntax parameters-syntax
                :message "implementation parameters must be a list"))
-      (let ((parameter-syntaxes (termis-list-elements (syntax-datum parameters-syntax))))
+      (let ((parameter-syntaxes (verona-list-elements (syntax-datum parameters-syntax))))
         (unless (= (length parameter-syntaxes) (generic-arity generic))
           (error 'generic-arity-mismatch-error :syntax parameters-syntax
                  :generic generic :actual (length parameter-syntaxes)))
@@ -973,7 +973,7 @@ the following type pass can turn it into canonical TERMIS-TYPE objects."
                         :name (declaration-name declaration)))
 	;; Macro declarations have already been handled by the evaluator.
 	((typep declaration 'macro-declaration) nil)
-	(t (error "Unknown Termis declaration ~S" declaration))))
+	(t (error "Unknown Verona declaration ~S" declaration))))
 
 (defun resolve-declaration-signature (program semantic-declaration)
   (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
@@ -1000,35 +1000,35 @@ semantic representation."
   (let ((body (type-declaration-body declaration)))
     ;; The explicit algebraic spelling is preferred, while the Step 15
     ;; spellings below remain accepted for source compatibility.
-    (when (and (= (length body) 1) (termis-list-p (syntax-datum (first body))))
-      (let ((elements (termis-list-elements (syntax-datum (first body)))))
-        (when (and elements (termis-name-p (syntax-datum (first elements)))
-                   (string= (termis-name-value (syntax-datum (first elements))) "product"))
+    (when (and (= (length body) 1) (verona-list-p (syntax-datum (first body))))
+      (let ((elements (verona-list-elements (syntax-datum (first body)))))
+        (when (and elements (verona-name-p (syntax-datum (first elements)))
+                   (string= (verona-name-value (syntax-datum (first elements))) "product"))
           (return-from product-field-syntaxes (rest elements)))))
-    (cond ((and (= (length body) 1) (termis-list-p (syntax-datum (first body)))
-		(let ((elements (termis-list-elements (syntax-datum (first body)))))
+    (cond ((and (= (length body) 1) (verona-list-p (syntax-datum (first body)))
+		(let ((elements (verona-list-elements (syntax-datum (first body)))))
 		  (or (null elements)
-		      (termis-list-p (syntax-datum (first elements))))))
-	   (termis-list-elements (syntax-datum (first body))))
-	  ((every (lambda (syntax) (termis-list-p (syntax-datum syntax))) body) body)
+		      (verona-list-p (syntax-datum (first elements))))))
+	   (verona-list-elements (syntax-datum (first body))))
+	  ((every (lambda (syntax) (verona-list-p (syntax-datum syntax))) body) body)
 	  ;; Earlier front-end milestones allowed TYPE to be an opaque declaration
 	  ;; payload.  Preserve those expansion tests as a zero-field nominal
 	  ;; product; actual product syntax is always list-shaped.
-	  ((every (lambda (syntax) (not (termis-list-p (syntax-datum syntax)))) body) '())
+	  ((every (lambda (syntax) (not (verona-list-p (syntax-datum syntax)))) body) '())
 	  (t body))))
 
 (defun parse-product-field-syntax (field-syntax)
-  (unless (termis-list-p (syntax-datum field-syntax))
+  (unless (verona-list-p (syntax-datum field-syntax))
     (error 'semantic-error :syntax field-syntax
            :message "product field must be a (name type) list"))
-  (let ((elements (termis-list-elements (syntax-datum field-syntax))))
+  (let ((elements (verona-list-elements (syntax-datum field-syntax))))
     (unless (= (length elements) 2)
       (error 'semantic-error :syntax field-syntax
              :message "product field must contain a name and type"))
     (let ((name (syntax-datum (first elements))))
-      (unless (termis-name-p name)
+      (unless (verona-name-p name)
         (error 'semantic-error :syntax (first elements)
-               :message "product field name must be a Termis name"))
+               :message "product field name must be a Verona name"))
       (values name (second elements)))))
 
 (defun ensure-type-is-complete (program resolved-type-syntax syntax)
@@ -1055,9 +1055,9 @@ semantic representation."
          (fields '()))
     (dolist (field-syntax (product-field-syntaxes declaration))
       (multiple-value-bind (name type-syntax) (parse-product-field-syntax field-syntax)
-        (let ((existing (find name fields :key #'product-field-name :test #'termis-name=)))
+        (let ((existing (find name fields :key #'product-field-name :test #'verona-name=)))
           (when existing
-            (error 'duplicate-field-error :syntax (first (termis-list-elements
+            (error 'duplicate-field-error :syntax (first (verona-list-elements
                                                            (syntax-datum field-syntax)))
                    :message "DuplicateField" :name name :existing existing)))
         (let ((reference (resolve-type-syntax scope type-syntax)))
@@ -1077,28 +1077,28 @@ semantic representation."
 
 (defun sum-alternative-syntaxes (declaration)
   (let ((body (type-declaration-body declaration)))
-    (unless (and (= (length body) 1) (termis-list-p (syntax-datum (first body))))
+    (unless (and (= (length body) 1) (verona-list-p (syntax-datum (first body))))
       (error 'semantic-error :syntax (declaration-source declaration)
              :message "sum type body must be a (sum ...) form"))
-    (let ((elements (termis-list-elements (syntax-datum (first body)))))
-      (unless (and elements (termis-name-p (syntax-datum (first elements)))
-                   (string= (termis-name-value (syntax-datum (first elements))) "sum"))
+    (let ((elements (verona-list-elements (syntax-datum (first body)))))
+      (unless (and elements (verona-name-p (syntax-datum (first elements)))
+                   (string= (verona-name-value (syntax-datum (first elements))) "sum"))
         (error 'semantic-error :syntax (first body)
                :message "type body must begin with product or sum"))
       (rest elements))))
 
 (defun parse-sum-alternative-syntax (alternative-syntax)
-  (unless (termis-list-p (syntax-datum alternative-syntax))
+  (unless (verona-list-p (syntax-datum alternative-syntax))
     (error 'semantic-error :syntax alternative-syntax
            :message "sum alternative must be a (name type...) list"))
-  (let ((elements (termis-list-elements (syntax-datum alternative-syntax))))
+  (let ((elements (verona-list-elements (syntax-datum alternative-syntax))))
     (unless elements
       (error 'semantic-error :syntax alternative-syntax
              :message "sum alternative requires a name"))
     (let ((name (syntax-datum (first elements))))
-      (unless (termis-name-p name)
+      (unless (verona-name-p name)
         (error 'semantic-error :syntax (first elements)
-               :message "sum alternative name must be a Termis name"))
+               :message "sum alternative name must be a Verona name"))
       (values name (rest elements)))))
 
 (defun resolve-sum-type-declaration (program semantic-declaration)
@@ -1114,7 +1114,7 @@ semantic representation."
       (multiple-value-bind (name payload-syntaxes)
           (parse-sum-alternative-syntax alternative-syntax)
         (let ((existing (find name alternatives :key #'sum-alternative-name
-                              :test #'termis-name=)))
+                              :test #'verona-name=)))
           (when existing
             (error 'duplicate-alternative-error :syntax alternative-syntax
                    :message "DuplicateAlternative" :name name :existing existing)))
@@ -1215,10 +1215,10 @@ type checker."
         (let* ((source (semantic-declaration-source-declaration declaration))
                (body (type-declaration-body source))
                (first-body (first body))
-               (head (and first-body (termis-list-p (syntax-datum first-body))
-                          (first (termis-list-elements (syntax-datum first-body))))))
-          (if (and head (termis-name-p (syntax-datum head))
-                   (string= (termis-name-value (syntax-datum head)) "sum"))
+               (head (and first-body (verona-list-p (syntax-datum first-body))
+                          (first (verona-list-elements (syntax-datum first-body))))))
+          (if (and head (verona-name-p (syntax-datum head))
+                   (string= (verona-name-value (syntax-datum head)) "sum"))
               (resolve-sum-type-declaration program declaration)
               (resolve-product-type-declaration program declaration))))))
   (dolist (entry (semantic-program-declarations program))
@@ -1240,8 +1240,8 @@ type checker."
 			   (source-location-line location)
 			   (source-location-column location))))
 	       (format stream "type mismatch~%expected: ~A~%actual:   ~A"
-		       (termis-type-name (type-mismatch-error-expected condition))
-		       (termis-type-name (type-mismatch-error-actual condition)))))))
+		       (verona-type-name (type-mismatch-error-expected condition))
+		       (verona-type-name (type-mismatch-error-actual condition)))))))
 
 (define-condition semantic-not-callable-error (semantic-error)
   ((actual :initarg :actual :reader semantic-not-callable-error-actual))
@@ -1279,7 +1279,7 @@ type checker."
 (define-condition not-writable-error (semantic-error) ())
 (define-condition invalid-expression-error (semantic-error) ())
 
-(defun termis-type-name (type)
+(defun verona-type-name (type)
   "A compact stable spelling used in semantic diagnostics."
   (cond ((typep type 'never-type) "never")
 	((typep type 'unit-type) "unit")
@@ -1291,14 +1291,14 @@ type checker."
 		 (integer-type-width type)))
 	((typep type 'float-type) (format nil "f~D" (float-type-width type)))
 	((typep type 'pointer-type)
-	 (format nil "(pointer ~A)" (termis-type-name (pointer-type-target type))))
+	 (format nil "(pointer ~A)" (verona-type-name (pointer-type-target type))))
 	((typep type 'function-type) "function")
 	((typep type 'defined-type)
-	 (termis-name-value (declaration-name (defined-type-declaration type))))
+	 (verona-name-value (declaration-name (defined-type-declaration type))))
 	(t "<unknown type>")))
 
 (defun same-type-p (left right)
-  "Whether LEFT and RIGHT are the same canonical Termis type."
+  "Whether LEFT and RIGHT are the same canonical Verona type."
   (eq left right))
 
 (defun c-abi-value-type-p (type)
@@ -1334,7 +1334,7 @@ type checker."
                (semantic (and declaration (semantic-program-declaration program declaration))))
           (unless (typep semantic 'semantic-function-declaration)
             (error 'invalid-native-export :syntax (native-export-spec-source spec)
-                   :message "native-export must name a Termis function"))
+                   :message "native-export must name a Verona function"))
           (when (member (native-export-spec-external-name spec) seen :test #'string=)
             (error 'invalid-native-export :syntax (native-export-spec-source spec)
                    :message "duplicate native C export name"))
@@ -1361,10 +1361,10 @@ type checker."
 
 (defun expression-special-form-name (syntax)
   (let ((datum (syntax-datum syntax)))
-    (when (termis-list-p datum)
-      (let ((head (first (termis-list-elements datum))))
-	(when (and head (termis-name-p (syntax-datum head)))
-	  (termis-name-value (syntax-datum head)))))))
+    (when (verona-list-p datum)
+      (let ((head (first (verona-list-elements datum))))
+	(when (and head (verona-name-p (syntax-datum head)))
+	  (verona-name-value (syntax-datum head)))))))
 
 (defun binding-expression-type (scope binding syntax)
   "Return BINDING's runtime type without changing its identity."
@@ -1416,7 +1416,7 @@ they represent parameter storage rather than C's accidental value category."
 
 (defun product-constructor-type (scope syntax)
   "Return the resolved ProductType selected by constructor head SYNTAX, if any."
-  (when (or (termis-name-p (syntax-datum syntax))
+  (when (or (verona-name-p (syntax-datum syntax))
             (qualified-name-p (syntax-datum syntax)))
     (let ((binding (semantic-reference-binding (resolve-name scope syntax))))
       (when (typep binding 'type-declaration)
@@ -1451,13 +1451,13 @@ they represent parameter storage rather than C's accidental value category."
 
 (defun expected-sum-constructor (syntax expected-type)
   "Resolve a constructor name only in the supplied expected sum type."
-  (when (and (typep expected-type 'sum-type) (termis-list-p (syntax-datum syntax)))
-    (let ((head (first (termis-list-elements (syntax-datum syntax)))) )
-      (when (and head (termis-name-p (syntax-datum head)))
+  (when (and (typep expected-type 'sum-type) (verona-list-p (syntax-datum syntax)))
+    (let ((head (first (verona-list-elements (syntax-datum syntax)))) )
+      (when (and head (verona-name-p (syntax-datum head)))
         (sum-type-find-alternative expected-type (syntax-datum head))))))
 
 (defun infer-call-expression (syntax scope)
-  (let* ((elements (termis-list-elements (syntax-datum syntax)))
+  (let* ((elements (verona-list-elements (syntax-datum syntax)))
 	 (head (first elements))
 	 (product-type (product-constructor-type scope head)))
     (when (typep product-type 'product-type)
@@ -1465,7 +1465,7 @@ they represent parameter storage rather than C's accidental value category."
         (infer-construct-expression syntax scope product-type (rest elements))))
     ;; Generics are resolved here, after arguments have concrete semantic
     ;; types, and are immediately replaced by a primitive or ordinary call.
-    (when (or (termis-name-p (syntax-datum head))
+    (when (or (verona-name-p (syntax-datum head))
               (qualified-name-p (syntax-datum head)))
       (let ((head-binding (semantic-reference-binding (resolve-name scope head))))
         (when (typep head-binding 'generic-binding)
@@ -1528,8 +1528,8 @@ they represent parameter storage rather than C's accidental value category."
 				 (semantic-program-declaration
 				  (semantic-scope-owning-program scope) binding))))
 	      (if (typep external 'semantic-external-function-declaration)
-		  ;; C void has no Termis value.  Only this external call boundary
-		  ;; materializes the ordinary Termis unit value.
+		  ;; C void has no Verona value.  Only this external call boundary
+		  ;; materializes the ordinary Verona unit value.
 		  (make-instance 'external-call-expression :syntax syntax :callee callee
 				 :arguments arguments :external-function external
 				 :type (if (typep (function-type-result callee-type) 'void-type)
@@ -1539,15 +1539,15 @@ they represent parameter storage rather than C's accidental value category."
 				 :arguments arguments :type (function-type-result callee-type)))))))))))
 
 (defun infer-field-expression (syntax scope)
-  (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
+  (let ((arguments (rest (verona-list-elements (syntax-datum syntax)))))
     (unless (= (length arguments) 2)
       (error 'invalid-expression-error :syntax syntax
              :message "field requires a product value and field name"))
     (let ((value (infer-value-expression (first arguments) scope))
           (name (syntax-datum (second arguments))))
-      (unless (termis-name-p name)
+      (unless (verona-name-p name)
         (error 'invalid-expression-error :syntax (second arguments)
-               :message "field name must be a Termis name"))
+               :message "field name must be a Verona name"))
       (let ((product-type (expression-type value)))
         (unless (typep product-type 'product-type)
           (error 'field-access-requires-product-error :syntax (first arguments)
@@ -1561,7 +1561,7 @@ they represent parameter storage rather than C's accidental value category."
 
 (defun infer-sequence-expression (syntax scope)
   (let ((expressions '()))
-    (dolist (form (rest (termis-list-elements (syntax-datum syntax))))
+    (dolist (form (rest (verona-list-elements (syntax-datum syntax))))
       (when (and expressions (typep (expression-type (car (last expressions))) 'never-type))
         (error 'unreachable-expression-error :syntax form
                :message "expression follows terminating control flow"))
@@ -1584,17 +1584,17 @@ they represent parameter storage rather than C's accidental value category."
 
 SCOPE is the child scope owned by the enclosing LET.  Earlier bindings are
 therefore visible, while the binding being built cannot see itself."
-  (unless (termis-list-p (syntax-datum binding-syntax))
+  (unless (verona-list-p (syntax-datum binding-syntax))
     (error 'invalid-expression-error :syntax binding-syntax
            :message "let binding must be a (name type initializer) list"))
-  (let ((elements (termis-list-elements (syntax-datum binding-syntax))))
+  (let ((elements (verona-list-elements (syntax-datum binding-syntax))))
     (unless (= (length elements) 3)
       (error 'invalid-expression-error :syntax binding-syntax
              :message "let binding must contain a name, type, and initializer"))
     (let ((name (syntax-datum (first elements))))
-      (unless (termis-name-p name)
+      (unless (verona-name-p name)
         (error 'invalid-expression-error :syntax (first elements)
-               :message "let binding name must be a Termis name"))
+               :message "let binding name must be a Verona name"))
       (multiple-value-bind (existing foundp) (semantic-scope-local-find scope name)
         (when foundp
           (error 'duplicate-local-binding-error :syntax (first elements)
@@ -1634,17 +1634,17 @@ therefore visible, while the binding being built cannot see itself."
 
 (defun infer-let-expression (syntax scope &optional expected-type)
   "Analyze a sequential, immutable lexical LET expression."
-  (let ((elements (termis-list-elements (syntax-datum syntax))))
+  (let ((elements (verona-list-elements (syntax-datum syntax))))
     (unless (>= (length elements) 3)
       (error 'invalid-expression-error :syntax syntax
              :message "let requires bindings and a body"))
     (let ((bindings-syntax (second elements)))
-      (unless (termis-list-p (syntax-datum bindings-syntax))
+      (unless (verona-list-p (syntax-datum bindings-syntax))
         (error 'invalid-expression-error :syntax bindings-syntax
                :message "let bindings must be a list"))
       (let ((let-scope (semantic-scope-child scope))
             (bindings '()))
-        (dolist (binding-syntax (termis-list-elements (syntax-datum bindings-syntax)))
+        (dolist (binding-syntax (verona-list-elements (syntax-datum bindings-syntax)))
           (push (parse-let-binding binding-syntax let-scope) bindings))
         (let ((body (infer-let-body syntax (cddr elements) let-scope expected-type)))
           (make-instance 'let-expression :syntax syntax :scope let-scope
@@ -1654,18 +1654,18 @@ therefore visible, while the binding being built cannot see itself."
 (defun analyze-pattern (syntax scope scrutinee-type)
   "Resolve one source pattern and install a binding in the case scope." 
   (let ((datum (syntax-datum syntax)))
-    (cond ((termis-list-p datum)
+    (cond ((verona-list-p datum)
            (unless (typep scrutinee-type 'sum-type)
              (error 'invalid-expression-error :syntax syntax
                     :message "constructor patterns require a sum scrutinee"))
-           (let ((elements (termis-list-elements datum)))
+           (let ((elements (verona-list-elements datum)))
              (unless elements
                (error 'invalid-expression-error :syntax syntax
                       :message "constructor pattern requires an alternative name"))
              (let ((name (syntax-datum (first elements))))
-               (unless (termis-name-p name)
+               (unless (verona-name-p name)
                  (error 'invalid-expression-error :syntax (first elements)
-                        :message "constructor pattern name must be a Termis name"))
+                        :message "constructor pattern name must be a Verona name"))
                (multiple-value-bind (alternative foundp)
                    (sum-type-find-alternative scrutinee-type name)
                  (unless foundp
@@ -1681,25 +1681,25 @@ therefore visible, while the binding being built cannot see itself."
                                   :payload-patterns
                                   (loop for payload-syntax in payload-syntaxes
                                         for payload-type in payload-types
-                                        do (when (termis-list-p (syntax-datum payload-syntax))
+                                        do (when (verona-list-p (syntax-datum payload-syntax))
                                              (error 'invalid-expression-error :syntax payload-syntax
                                                     :message "nested constructor patterns are not supported yet"))
                                         collect (analyze-pattern payload-syntax scope payload-type))))))))
-          ((termis-boolean-literal-p datum)
+          ((verona-boolean-literal-p datum)
 	   (unless (typep scrutinee-type 'boolean-type)
 	     (error 'type-mismatch-error :syntax syntax
 		    :actual (type-context-boolean-type (semantic-scope-owning-type-context scope))
 		    :expected scrutinee-type))
 	   (make-instance 'boolean-pattern :syntax syntax :type scrutinee-type
-			  :value (termis-boolean-literal-value datum)))
+			  :value (verona-boolean-literal-value datum)))
 	  ((integerp datum)
 	   (unless (typep scrutinee-type 'integer-type)
 	     (error 'type-mismatch-error :syntax syntax
 		    :actual (type-context-integer-type (semantic-scope-owning-type-context scope) t 32)
 		    :expected scrutinee-type))
 	   (make-instance 'integer-pattern :syntax syntax :type scrutinee-type :value datum))
-	  ((termis-name-p datum)
-	   (if (string= (termis-name-value datum) "_")
+	  ((verona-name-p datum)
+	   (if (string= (verona-name-value datum) "_")
 	       (make-instance 'wildcard-pattern :syntax syntax :type scrutinee-type)
 	       (let ((binding (make-instance 'pattern-binding :name datum :syntax syntax
 					    :type scrutinee-type)))
@@ -1763,20 +1763,20 @@ therefore visible, while the binding being built cannot see itself."
                      ((typep scrutinee-type 'sum-type)
                       (format nil "~{~A~^, ~}"
                               (mapcar (lambda (alternative)
-                                        (termis-name-value
+                                        (verona-name-value
                                          (sum-alternative-name alternative)))
                                       (remove-if #'complete-alternative-p
                                                  (sum-type-alternatives scrutinee-type)))))
                      (t "a catch-all pattern")))))))
 
 (defun parse-match-cases (syntax scope scrutinee-type)
-  (let ((case-syntaxes (cddr (termis-list-elements (syntax-datum syntax)))))
+  (let ((case-syntaxes (cddr (verona-list-elements (syntax-datum syntax)))))
     (unless case-syntaxes
       (error 'invalid-expression-error :syntax syntax :message "match requires at least one case"))
     (let ((cases
 	    (mapcar (lambda (case-syntax)
-		      (let ((elements (and (termis-list-p (syntax-datum case-syntax))
-				   (termis-list-elements (syntax-datum case-syntax)))))
+		      (let ((elements (and (verona-list-p (syntax-datum case-syntax))
+				   (verona-list-elements (syntax-datum case-syntax)))))
 			(unless (= (length elements) 2)
 			  (error 'invalid-expression-error :syntax case-syntax
 				 :message "match case must be a (pattern expression) list"))
@@ -1789,7 +1789,7 @@ therefore visible, while the binding being built cannot see itself."
       cases)))
 
 (defun infer-match-expression (syntax scope &optional expected-type)
-  (let* ((elements (termis-list-elements (syntax-datum syntax)))
+  (let* ((elements (verona-list-elements (syntax-datum syntax)))
 	 (value (infer-value-expression (second elements) scope))
 	 (cases (parse-match-cases syntax scope (expression-type value))))
     ;; Analyse all branch scopes before choosing contextual literal types.
@@ -1816,7 +1816,7 @@ therefore visible, while the binding being built cannot see itself."
 			     :type result-type))))
 
 (defun infer-return-expression (syntax scope)
-  (let ((arguments (rest (termis-list-elements (syntax-datum syntax))))
+  (let ((arguments (rest (verona-list-elements (syntax-datum syntax))))
 	(function (semantic-scope-owning-function scope)))
     (unless function
       (error 'return-outside-function-error :syntax syntax :message "return is only valid inside a function"))
@@ -1830,7 +1830,7 @@ therefore visible, while the binding being built cannot see itself."
 		   :type (type-context-never-type (semantic-scope-owning-type-context scope)))))
 
 (defun infer-address-expression (syntax scope)
-  (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
+  (let ((arguments (rest (verona-list-elements (syntax-datum syntax)))))
     (unless (= (length arguments) 1)
       (error 'invalid-expression-error :syntax syntax
 				       :message "& requires exactly one operand"))
@@ -1845,7 +1845,7 @@ therefore visible, while the binding being built cannot see itself."
 						(expression-type operand))))))
 
 (defun infer-dereference-expression (syntax scope)
-  (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
+  (let ((arguments (rest (verona-list-elements (syntax-datum syntax)))))
     (unless (= (length arguments) 1)
       (error 'invalid-expression-error :syntax syntax
 				       :message "deref requires exactly one operand"))
@@ -1863,7 +1863,7 @@ therefore visible, while the binding being built cannot see itself."
 
 (defun infer-pointer-cast-expression (syntax scope)
   "Apply the only initial pointer conversion: T* <-> void*."
-  (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
+  (let ((arguments (rest (verona-list-elements (syntax-datum syntax)))))
     (unless (= (length arguments) 2)
       (error 'invalid-expression-error :syntax syntax
              :message "cast requires a target type and one operand"))
@@ -1886,7 +1886,7 @@ therefore visible, while the binding being built cannot see itself."
   (make-instance 'load-expression :syntax syntax :place place :type (expression-type place)))
 
 (defun infer-load-expression (syntax scope)
-  (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
+  (let ((arguments (rest (verona-list-elements (syntax-datum syntax)))))
     (unless (= (length arguments) 1)
       (error 'invalid-expression-error :syntax syntax :message "load requires exactly one operand"))
     (load-place-expression syntax (infer-expression (first arguments) scope))))
@@ -1900,7 +1900,7 @@ therefore visible, while the binding being built cannot see itself."
 	expression)))
 
 (defun infer-assignment-expression (syntax scope)
-  (let ((arguments (rest (termis-list-elements (syntax-datum syntax)))))
+  (let ((arguments (rest (verona-list-elements (syntax-datum syntax)))))
     (unless (= (length arguments) 2)
       (error 'invalid-expression-error :syntax syntax
 				       :message "assign requires a target and a value"))
@@ -1925,8 +1925,8 @@ therefore visible, while the binding being built cannot see itself."
 	   (make-instance 'unit-expression :syntax syntax
 					   :value (type-context-unit-value context)
 					   :type (type-context-unit-type context)))
-	  ((termis-boolean-literal-p datum)
-	   (make-instance 'boolean-literal :syntax syntax :value (termis-boolean-literal-value datum)
+	  ((verona-boolean-literal-p datum)
+	   (make-instance 'boolean-literal :syntax syntax :value (verona-boolean-literal-value datum)
 					   :type (type-context-boolean-type context)))
 	  ((integerp datum)
 	   (make-instance 'integer-literal :syntax syntax :value datum
@@ -1937,10 +1937,10 @@ therefore visible, while the binding being built cannot see itself."
 	  ((stringp datum)
 	   (make-instance 'string-literal :syntax syntax :value datum
 					  :type (type-context-string-type context)))
-	  ((or (termis-name-p datum) (qualified-name-p datum))
+	  ((or (verona-name-p datum) (qualified-name-p datum))
            (infer-reference-expression syntax scope))
-	  ((termis-list-p datum)
-	   (let ((elements (termis-list-elements datum)))
+	  ((verona-list-p datum)
+	   (let ((elements (verona-list-elements datum)))
 	     (unless elements
 	       (error 'invalid-expression-error :syntax syntax
 						:message "an empty list is not an expression"))
@@ -1955,7 +1955,7 @@ therefore visible, while the binding being built cannot see itself."
 		      (error 'invalid-definition-context-error :syntax syntax
 			     :message "constant and variable definitions are only valid at top level"))
 		     ((and special (string= special "match"))
-		      (let ((elements (termis-list-elements datum)))
+		      (let ((elements (verona-list-elements datum)))
 			(unless (>= (length elements) 3)
 			  (error 'invalid-expression-error :syntax syntax
 				 :message "match requires a value and at least one case"))
@@ -1984,22 +1984,22 @@ therefore visible, while the binding being built cannot see itself."
 
 (defun check-expression (syntax scope expected-type)
   "Analyze SYNTAX with EXPECTED-TYPE, contextually typing numeric literals."
-  (check-type expected-type termis-type)
+  (check-type expected-type verona-type)
   (let ((datum (syntax-datum syntax)))
-    (cond ((and (termis-list-p datum)
+    (cond ((and (verona-list-p datum)
 		(expected-sum-constructor syntax expected-type))
 	   (multiple-value-bind (alternative foundp)
 	       (expected-sum-constructor syntax expected-type)
 	     (declare (ignore foundp))
 	     (infer-sum-construct-expression
 	      syntax scope expected-type alternative
-	      (rest (termis-list-elements datum)))))
-	  ((and (termis-list-p datum)
+	      (rest (verona-list-elements datum)))))
+	  ((and (verona-list-p datum)
 		(expression-special-form-name syntax)
 		(string= (expression-special-form-name syntax) "match"))
 	   (let ((expression (infer-match-expression syntax scope expected-type)))
 	     expression))
-	  ((and (termis-list-p datum)
+	  ((and (verona-list-p datum)
 		(expression-special-form-name syntax)
 		(string= (expression-special-form-name syntax) "let"))
 	   (infer-let-expression syntax scope expected-type))
@@ -2041,7 +2041,7 @@ the primitive model."
 	((typep type 'product-type)
 	 (every (lambda (field)
 		  (and (typep field 'product-field)
-		       (typep (product-field-type field) 'termis-type)
+		       (typep (product-field-type field) 'verona-type)
 		       (backend-representable-type-p (product-field-type field))))
 		(product-type-fields type)))
 	((typep type 'sum-type)
@@ -2056,25 +2056,25 @@ the primitive model."
 (defun validate-primitive-operation (operation expression)
   (unless (typep operation 'primitive-operation)
     (backend-validation-fail expression "primitive call has no PrimitiveOperation identity"))
-  (unless (and (every (lambda (type) (typep type 'termis-type))
+  (unless (and (every (lambda (type) (typep type 'verona-type))
 		      (primitive-operation-parameter-types operation))
-	       (typep (primitive-operation-result-type operation) 'termis-type))
+	       (typep (primitive-operation-result-type operation) 'verona-type))
     (backend-validation-fail expression "primitive operation has an unresolved type"))
   (unless (backend-representable-type-p (primitive-operation-result-type operation))
     (backend-validation-fail expression "primitive operation result is not backend representable")))
 
 (defun validate-expression-for-backend (expression)
-  (unless (and (typep expression 'expression) (typep (expression-type expression) 'termis-type))
+  (unless (and (typep expression 'expression) (typep (expression-type expression) 'verona-type))
     (backend-validation-fail expression "expression is missing a resolved semantic type"))
   (unless (or (typep (expression-type expression) 'never-type)
 	      (backend-representable-type-p (expression-type expression))
 	      ;; An external function with a void result is callable but is not a
-	      ;; Termis value type.  Its call node supplies unit at the boundary.
+	      ;; Verona value type.  Its call node supplies unit at the boundary.
 	      (and (typep expression 'semantic-reference)
 		   (typep (semantic-reference-binding expression)
 			  'external-function-declaration)))
     (backend-validation-fail expression "expression type ~A is not backend representable"
-			     (termis-type-name (expression-type expression))))
+			     (verona-type-name (expression-type expression))))
   (cond
     ((typep expression 'construct-expression)
      (let ((product-type (construct-expression-product-type expression))
@@ -2128,7 +2128,7 @@ the primitive model."
        (let ((pattern (match-case-pattern case))
 	     (branch (match-case-expression case)))
 	   (unless (and (typep pattern 'pattern)
-			(typep (pattern-type pattern) 'termis-type)
+			(typep (pattern-type pattern) 'verona-type)
 			(same-type-p (pattern-type pattern)
 				     (expression-type (match-expression-value expression))))
 	     (backend-validation-fail expression "match pattern is unresolved or incompatible"))
@@ -2156,7 +2156,7 @@ the primitive model."
 	    ((typep expression 'let-expression)
 	     (dolist (binding (let-expression-bindings expression))
 	       (unless (and (typep binding 'let-binding)
-			    (typep (let-binding-type binding) 'termis-type)
+			    (typep (let-binding-type binding) 'verona-type)
 			    (typep (let-binding-initializer binding) 'expression))
 		 (backend-validation-fail expression "let binding is incomplete"))
 	       (validate-expression-for-backend (let-binding-initializer binding))
@@ -2259,7 +2259,7 @@ the primitive model."
 		   (typep (expression-type expression) 'unit-type)
 		   (same-type-p (expression-type expression)
 				(function-type-result callee-type)))
-	 (backend-validation-fail expression "external call result has the wrong Termis type"))))
+	 (backend-validation-fail expression "external call result has the wrong Verona type"))))
     ((typep expression 'semantic-call)
      (validate-expression-for-backend (semantic-call-callee expression))
      (let ((callee-type (expression-type (semantic-call-callee expression))))
@@ -2351,14 +2351,14 @@ the primitive model."
 				  (loop for field in (product-type-fields type)
 					for index from 0
 					always (and (typep field 'product-field)
-						    (typep (product-field-name field) 'termis-name)
+						    (typep (product-field-name field) 'verona-name)
 						    (= (product-field-index field) index)
 						    (backend-representable-type-p (product-field-type field))))
 				  (loop for alternative in (sum-type-alternatives type)
 					for index from 0
 					always (and (typep alternative 'sum-alternative)
 						    (eq (sum-alternative-sum-type alternative) type)
-						    (typep (sum-alternative-name alternative) 'termis-name)
+						    (typep (sum-alternative-name alternative) 'verona-name)
 						    (= (sum-alternative-index alternative) index)
 						    (every #'backend-representable-type-p
 							   (sum-alternative-payload-types alternative))))))

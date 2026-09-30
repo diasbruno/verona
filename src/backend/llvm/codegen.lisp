@@ -1,7 +1,7 @@
-(in-package #:termis.backend.llvm)
+(in-package #:verona.backend.llvm)
 
 (defclass linker-configuration ()
-  ((executable :initarg :executable :initform (or (uiop:getenv "TERMIS_LINKER") "clang")
+  ((executable :initarg :executable :initform (or (uiop:getenv "VERONA_LINKER") "clang")
                :reader linker-configuration-executable)
    (arguments :initarg :arguments :initform '() :reader linker-configuration-arguments)
    (libraries :initarg :libraries :initform '() :reader linker-configuration-libraries)
@@ -13,7 +13,7 @@
                                        (library-paths '()) (framework-paths '()))
   "Configure the system compiler driver used for platform startup and linking."
   (make-instance 'linker-configuration :executable (or executable
-                                                        (uiop:getenv "TERMIS_LINKER")
+                                                        (uiop:getenv "VERONA_LINKER")
                                                         "clang")
                  :arguments arguments :libraries libraries
                  :library-paths library-paths :framework-paths framework-paths))
@@ -31,7 +31,7 @@
                                         (optimization-level :none)
                                         relocation-model code-model (output-kind :object)
                                         (linker (make-linker-configuration)))
-  "Keep target and output choices outside the semantic Termis program."
+  "Keep target and output choices outside the semantic Verona program."
   (check-type target target-configuration)
   (unless (member output-kind '(:llvm-ir :object :executable))
     (target-fail "unsupported output kind ~S" output-kind))
@@ -69,44 +69,44 @@
   (error 'entry-point-error :message (apply #'format nil control arguments)))
 
 (defun source-name= (binding name)
-  (string= (termis:termis-name-value (termis:semantic-binding-name binding)) name))
+  (string= (verona:verona-name-value (verona:semantic-binding-name binding)) name))
 
 (defun find-entry-function (program)
   (find-if (lambda (declaration)
-             (and (typep declaration 'termis:semantic-function-declaration)
+             (and (typep declaration 'verona:semantic-function-declaration)
                   (source-name= (semantic-source-binding declaration) "main")))
            (semantic-declarations program)))
 
 (defun i64-type-p (type)
-  (and (typep type 'termis:integer-type)
-       (termis:integer-type-signed type)
-       (= 64 (termis:integer-type-width type))))
+  (and (typep type 'verona:integer-type)
+       (verona:integer-type-signed type)
+       (= 64 (verona:integer-type-width type))))
 
 (defun validate-executable-entry-point (program)
-  "Enforce the Termis executable contract: main : () -> unit."
+  "Enforce the Verona executable contract: main : () -> unit."
   (let ((entry (find-entry-function program)))
     (unless entry
-      (entry-fail "executable requires a Termis function named main"))
-    (unless (null (termis:semantic-function-declaration-parameters entry))
-      (entry-fail "Termis main must not have parameters"))
-    (unless (typep (termis:semantic-function-declaration-return-type entry)
-                   'termis:unit-type)
-      (entry-fail "Termis main must return unit"))
+      (entry-fail "executable requires a Verona function named main"))
+    (unless (null (verona:semantic-function-declaration-parameters entry))
+      (entry-fail "Verona main must not have parameters"))
+    (unless (typep (verona:semantic-function-declaration-return-type entry)
+                   'verona:unit-type)
+      (entry-fail "Verona main must return unit"))
     entry))
 
 (defun add-platform-entry-wrapper (backend program)
-  "Add C-compatible main without making the C ABI a Termis language rule."
+  "Add C-compatible main without making the C ABI a Verona language rule."
   (let* ((entry (validate-executable-entry-point program))
-         (termis-main (backend-binding backend entry))
+         (verona-main (backend-binding backend entry))
          (context (llvm-backend-context backend))
          (platform-main (llvm:add-function
                          (llvm-backend-module backend) "main"
                          (llvm:function-type (llvm:int32-type :context context) '())))
          (block (llvm:append-basic-block platform-main "entry" :context context)))
     (llvm:position-builder-at-end (llvm-backend-builder backend) block)
-    ;; Termis Unit has a target-sized internal representation, but it is not
+    ;; Verona Unit has a target-sized internal representation, but it is not
     ;; an exit status.  The platform ABI boundary deliberately ignores it.
-    (llvm:build-call (llvm-backend-builder backend) termis-main '() "termis.main")
+    (llvm:build-call (llvm-backend-builder backend) verona-main '() "verona.main")
     (llvm:build-ret (llvm-backend-builder backend)
                     (llvm:const-int (llvm:int32-type :context context) 0))
     platform-main))
@@ -119,17 +119,17 @@ the `main : () -> unit` contract.  Keeping this private adapter avoids making
 the Step 23 API change gratuitously break the backend's older embedding API."
   (let* ((entry (find-entry-function program))
          (context (llvm-backend-context backend)))
-    (unless (and entry (null (termis:semantic-function-declaration-parameters entry))
-                 (i64-type-p (termis:semantic-function-declaration-return-type entry)))
+    (unless (and entry (null (verona:semantic-function-declaration-parameters entry))
+                 (i64-type-p (verona:semantic-function-declaration-return-type entry)))
       (return-from add-legacy-platform-entry-wrapper
         (add-platform-entry-wrapper backend program)))
-    (let* ((termis-main (backend-binding backend entry))
+    (let* ((verona-main (backend-binding backend entry))
            (platform-main (llvm:add-function
                            (llvm-backend-module backend) "main"
                            (llvm:function-type (llvm:int32-type :context context) '())))
            (block (llvm:append-basic-block platform-main "entry" :context context)))
       (llvm:position-builder-at-end (llvm-backend-builder backend) block)
-      (let ((result (llvm:build-call (llvm-backend-builder backend) termis-main '() "termis.exit")))
+      (let ((result (llvm:build-call (llvm-backend-builder backend) verona-main '() "verona.exit")))
         (llvm:build-ret (llvm-backend-builder backend)
                         (llvm:build-trunc (llvm-backend-builder backend) result
                                           (llvm:int32-type :context context) "exit.status")))
@@ -165,12 +165,12 @@ the Step 23 API change gratuitously break the backend's older embedding API."
       output)))
 
 (defun temporary-object-path ()
-  (merge-pathnames (format nil "termis-~A.o" (gensym "OBJECT-"))
+  (merge-pathnames (format nil "verona-~A.o" (gensym "OBJECT-"))
                    (uiop:temporary-directory)))
 
 (defun build-executable (program output &key (configuration (make-codegen-configuration :output-kind :executable)))
   "Lower PROGRAM, generate a private object, link it, then remove that object."
-  (check-type program termis:semantic-program)
+  (check-type program verona:semantic-program)
   (let* ((object (temporary-object-path))
          (backend (generate-llvm program
                                  :target-configuration (codegen-configuration-target configuration)

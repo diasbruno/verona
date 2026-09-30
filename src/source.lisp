@@ -1,4 +1,4 @@
-(in-package #:termis)
+(in-package #:verona)
 
 (define-condition source-error (error)
   ((message :initarg :message :reader source-error-message))

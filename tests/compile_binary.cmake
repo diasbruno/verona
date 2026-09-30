@@ -1,17 +1,17 @@
-set(output "${TERMIS_BINARY_DIR}/termis-add")
-set(stdlib_output "${TERMIS_BINARY_DIR}/termis-stdlib")
-set(ffi_output "${TERMIS_BINARY_DIR}/termis-ffi")
-set(zero_terminated_memory_output "${TERMIS_BINARY_DIR}/termis-zero-terminated-memory")
-set(hello_output "${TERMIS_BINARY_DIR}/termis-hello")
+set(output "${VERONA_BINARY_DIR}/verona-add")
+set(stdlib_output "${VERONA_BINARY_DIR}/verona-stdlib")
+set(ffi_output "${VERONA_BINARY_DIR}/verona-ffi")
+set(zero_terminated_memory_output "${VERONA_BINARY_DIR}/verona-zero-terminated-memory")
+set(hello_output "${VERONA_BINARY_DIR}/verona-hello")
 
 execute_process(
-  COMMAND "${TERMISC}" -I "${TERMIS_SOURCE_DIR}/std" --dump-llvm "${TERMIS_SOURCE_DIR}/examples/add.termis"
+  COMMAND "${VERONAC}" -I "${VERONA_SOURCE_DIR}/std" --dump-llvm "${VERONA_SOURCE_DIR}/examples/add.vrn"
   RESULT_VARIABLE std_dump_result
   OUTPUT_VARIABLE std_dump_output
   ERROR_VARIABLE std_dump_error)
 
 if(NOT std_dump_result EQUAL 0)
-  message(FATAL_ERROR "termisc failed while loading std modules:\n${std_dump_output}\n${std_dump_error}")
+  message(FATAL_ERROR "veronac failed while loading std modules:\n${std_dump_output}\n${std_dump_error}")
 endif()
 
 if(NOT std_dump_output MATCHES "declare ptr @malloc")
@@ -23,13 +23,13 @@ if(NOT std_dump_output MATCHES "declare i64 @strlen\\(ptr\\)")
 endif()
 
 execute_process(
-  COMMAND "${TERMISC}" -o "${output}" "${TERMIS_SOURCE_DIR}/examples/add.termis"
+  COMMAND "${VERONAC}" -o "${output}" "${VERONA_SOURCE_DIR}/examples/add.vrn"
   RESULT_VARIABLE compile_result
   OUTPUT_VARIABLE compile_output
   ERROR_VARIABLE compile_error)
 
 if(NOT compile_result EQUAL 0)
-  message(FATAL_ERROR "termisc failed:\n${compile_output}\n${compile_error}")
+  message(FATAL_ERROR "veronac failed:\n${compile_output}\n${compile_error}")
 endif()
 
 execute_process(
@@ -41,13 +41,13 @@ if(NOT run_result EQUAL 42)
 endif()
 
 execute_process(
-  COMMAND "${TERMISC}" -I "${TERMIS_SOURCE_DIR}/std" -o "${stdlib_output}" "${TERMIS_SOURCE_DIR}/examples/stdlib.termis"
+  COMMAND "${VERONAC}" -I "${VERONA_SOURCE_DIR}/std" -o "${stdlib_output}" "${VERONA_SOURCE_DIR}/examples/stdlib.vrn"
   RESULT_VARIABLE stdlib_compile_result
   OUTPUT_VARIABLE stdlib_compile_output
   ERROR_VARIABLE stdlib_compile_error)
 
 if(NOT stdlib_compile_result EQUAL 0)
-  message(FATAL_ERROR "termisc failed for stdlib example:\n${stdlib_compile_output}\n${stdlib_compile_error}")
+  message(FATAL_ERROR "veronac failed for stdlib example:\n${stdlib_compile_output}\n${stdlib_compile_error}")
 endif()
 
 execute_process(
@@ -59,13 +59,13 @@ if(NOT stdlib_run_result EQUAL 42)
 endif()
 
 execute_process(
-  COMMAND "${TERMISC}" -o "${ffi_output}" "${TERMIS_SOURCE_DIR}/examples/ffi.termis"
+  COMMAND "${VERONAC}" -o "${ffi_output}" "${VERONA_SOURCE_DIR}/examples/ffi.vrn"
   RESULT_VARIABLE ffi_compile_result
   OUTPUT_VARIABLE ffi_compile_output
   ERROR_VARIABLE ffi_compile_error)
 
 if(NOT ffi_compile_result EQUAL 0)
-  message(FATAL_ERROR "termisc failed for FFI example:\n${ffi_compile_output}\n${ffi_compile_error}")
+  message(FATAL_ERROR "veronac failed for FFI example:\n${ffi_compile_output}\n${ffi_compile_error}")
 endif()
 
 execute_process(
@@ -77,13 +77,13 @@ if(NOT ffi_run_result EQUAL 42)
 endif()
 
 execute_process(
-  COMMAND "${TERMISC}" -I "${TERMIS_SOURCE_DIR}/std" -o "${zero_terminated_memory_output}" "${TERMIS_SOURCE_DIR}/examples/zero-terminated-memory.termis"
+  COMMAND "${VERONAC}" -I "${VERONA_SOURCE_DIR}/std" -o "${zero_terminated_memory_output}" "${VERONA_SOURCE_DIR}/examples/zero-terminated-memory.vrn"
   RESULT_VARIABLE zero_terminated_memory_compile_result
   OUTPUT_VARIABLE zero_terminated_memory_compile_output
   ERROR_VARIABLE zero_terminated_memory_compile_error)
 
 if(NOT zero_terminated_memory_compile_result EQUAL 0)
-  message(FATAL_ERROR "termisc failed for zero-terminated memory example:\n${zero_terminated_memory_compile_output}\n${zero_terminated_memory_compile_error}")
+  message(FATAL_ERROR "veronac failed for zero-terminated memory example:\n${zero_terminated_memory_compile_output}\n${zero_terminated_memory_compile_error}")
 endif()
 
 execute_process(
@@ -95,13 +95,13 @@ if(NOT zero_terminated_memory_run_result EQUAL 0)
 endif()
 
 execute_process(
-  COMMAND "${TERMISC}" -I "${TERMIS_SOURCE_DIR}/std" -o "${hello_output}" "${TERMIS_SOURCE_DIR}/examples/hello.termis"
+  COMMAND "${VERONAC}" -I "${VERONA_SOURCE_DIR}/std" -o "${hello_output}" "${VERONA_SOURCE_DIR}/examples/hello.vrn"
   RESULT_VARIABLE hello_compile_result
   OUTPUT_VARIABLE hello_compile_output
   ERROR_VARIABLE hello_compile_error)
 
 if(NOT hello_compile_result EQUAL 0)
-  message(FATAL_ERROR "termisc failed for hello example:\n${hello_compile_output}\n${hello_compile_error}")
+  message(FATAL_ERROR "veronac failed for hello example:\n${hello_compile_output}\n${hello_compile_error}")
 endif()
 
 execute_process(
@@ -109,6 +109,6 @@ execute_process(
   RESULT_VARIABLE hello_run_result
   OUTPUT_VARIABLE hello_run_output)
 
-if(NOT hello_run_output STREQUAL "Hello from Termis\n")
-  message(FATAL_ERROR "hello example printed '${hello_run_output}', expected 'Hello from Termis\\n'")
+if(NOT hello_run_output STREQUAL "Hello from Verona\n")
+  message(FATAL_ERROR "hello example printed '${hello_run_output}', expected 'Hello from Verona\\n'")
 endif()

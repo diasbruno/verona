@@ -16,15 +16,15 @@ void require(bool condition, std::string_view message) {
   }
 }
 
-termis::TypePtr parse_one_type(std::string_view source) {
-  auto forms = termis::read_forms(source);
+verona::TypePtr parse_one_type(std::string_view source) {
+  auto forms = verona::read_forms(source);
   require(forms.size() == 1, "expected one form");
-  return termis::parse_type(*forms[0]);
+  return verona::parse_type(*forms[0]);
 }
 
-termis::Layout layout_of(std::string_view source) {
-  termis::TypeEnvironment types;
-  termis::LayoutEngine engine(types);
+verona::Layout layout_of(std::string_view source) {
+  verona::TypeEnvironment types;
+  verona::LayoutEngine engine(types);
   return engine.compute(*parse_one_type(source));
 }
 
@@ -76,10 +76,10 @@ void computes_union_and_sum_layouts() {
 }
 
 void computes_named_type_layouts() {
-  auto forms = termis::read_forms("(type Point (product (x f32) (y f32)))");
-  const auto program = termis::analyze_forms(forms);
+  auto forms = verona::read_forms("(type Point (product (x f32) (y f32)))");
+  const auto program = verona::analyze_forms(forms);
   const auto point = parse_one_type("Point");
-  termis::LayoutEngine engine(program.types);
+  verona::LayoutEngine engine(program.types);
   const auto layout = engine.compute(*point);
 
   require(layout.size == 8, "expected named type size");
@@ -87,10 +87,10 @@ void computes_named_type_layouts() {
 }
 
 void computes_generic_type_layouts() {
-  auto forms = termis::read_forms("(type Pair (A B) (product (first A) (second B)))");
-  const auto program = termis::analyze_forms(forms);
+  auto forms = verona::read_forms("(type Pair (A B) (product (first A) (second B)))");
+  const auto program = verona::analyze_forms(forms);
   const auto pair = parse_one_type("(Pair i32 i64)");
-  termis::LayoutEngine engine(program.types);
+  verona::LayoutEngine engine(program.types);
   const auto layout = engine.compute(*pair);
 
   require(layout.size == 16, "expected generic layout size");
@@ -103,7 +103,7 @@ void computes_generic_type_layouts() {
 void rejects_void_layout() {
   try {
     (void)layout_of("void");
-  } catch (const termis::LayoutError& error) {
+  } catch (const verona::LayoutError& error) {
     require(error.diagnostic().message == "void does not have a source-language value layout",
             "expected void layout diagnostic");
     return;
@@ -115,7 +115,7 @@ void rejects_void_layout() {
 void rejects_non_literal_array_size() {
   try {
     (void)layout_of("(array u8 size)");
-  } catch (const termis::TypeError& error) {
+  } catch (const verona::TypeError& error) {
     require(error.diagnostic().message == "array size must be an integer literal",
             "expected array size diagnostic");
     return;

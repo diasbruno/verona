@@ -1,4 +1,4 @@
-# Current Termis examples
+# Current Verona examples
 
 Each file is a self-contained program using syntax and language features
 implemented by the current compiler. Every program defines `main` and returns
@@ -6,12 +6,12 @@ implemented by the current compiler. Every program defines `main` and returns
 
 | File | Demonstrates |
 | --- | --- |
-| `01-arithmetic.termis` | Typed function parameters and integer addition |
-| `02-let-bindings.termis` | Typed, sequential local bindings |
-| `03-match.termis` | Boolean matching |
-| `04-products.termis` | Product types, construction, and field access |
-| `05-sum-types.termis` | Sum types, constructors, and constructor patterns |
-| `06-generics.termis` | Generic dispatch and a concrete implementation |
+| `01-arithmetic.vrn` | Typed function parameters and integer addition |
+| `02-let-bindings.vrn` | Typed, sequential local bindings |
+| `03-match.vrn` | Boolean matching |
+| `04-products.vrn` | Product types, construction, and field access |
+| `05-sum-types.vrn` | Sum types, constructors, and constructor patterns |
+| `06-generics.vrn` | Generic dispatch and a concrete implementation |
 
 `make test` compiles every file, and `make test-llvm` executes every file, so
 these examples are kept in step with the supported front end and backend.

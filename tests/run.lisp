@@ -7,8 +7,8 @@
     (error "Quicklisp is required; expected its setup file at ~A" quicklisp))
   (load quicklisp)
   (uiop:symbol-call :ql :quickload :fiveam)
-  (asdf:load-asd (merge-pathnames "termis.asd" root))
-  (asdf:load-system :termis/tests)
-  (unless (uiop:symbol-call :termis/tests :run-tests)
+  (asdf:load-asd (merge-pathnames "verona.asd" root))
+  (asdf:load-system :verona/tests)
+  (unless (uiop:symbol-call :verona/tests :run-tests)
     (uiop:quit 1)))
 

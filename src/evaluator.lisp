@@ -1,33 +1,33 @@
-(in-package #:termis)
+(in-package #:verona)
 
-(defclass termis-callable () ())
+(defclass verona-callable () ())
 
-(defun termis-callable-p (object)
-  (typep object 'termis-callable))
+(defun verona-callable-p (object)
+  (typep object 'verona-callable))
 
-(defclass termis-function (termis-callable)
-  ((implementation :initarg :implementation :reader termis-function-implementation)))
+(defclass verona-function (verona-callable)
+  ((implementation :initarg :implementation :reader verona-function-implementation)))
 
-(defun termis-function-p (object)
-  (typep object 'termis-function))
+(defun verona-function-p (object)
+  (typep object 'verona-function))
 
-(defun make-termis-function (implementation)
-  "Wrap IMPLEMENTATION as a callable that receives evaluated Termis values."
+(defun make-verona-function (implementation)
+  "Wrap IMPLEMENTATION as a callable that receives evaluated Verona values."
   (check-type implementation function)
-  (make-instance 'termis-function :implementation implementation))
+  (make-instance 'verona-function :implementation implementation))
 
-(defclass termis-macro (termis-callable)
-  ((implementation :initarg :implementation :reader termis-macro-implementation)))
+(defclass verona-macro (verona-callable)
+  ((implementation :initarg :implementation :reader verona-macro-implementation)))
 
-(defun termis-macro-p (object)
-  (typep object 'termis-macro))
+(defun verona-macro-p (object)
+  (typep object 'verona-macro))
 
-(defun make-termis-macro (implementation)
+(defun make-verona-macro (implementation)
   "Wrap IMPLEMENTATION as a callable that receives unevaluated SYNTAX arguments.
 
 IMPLEMENTATION must return one SYNTAX object."
   (check-type implementation function)
-  (make-instance 'termis-macro :implementation implementation))
+  (make-instance 'verona-macro :implementation implementation))
 
 ;; Macro implementations receive their arguments as syntax objects.  Retaining
 ;; the enclosing form during expansion lets the bootstrap definition macros
@@ -37,19 +37,19 @@ IMPLEMENTATION must return one SYNTAX object."
 (define-condition unbound-name-error (error)
   ((name :initarg :name :reader unbound-name-error-name))
   (:report (lambda (condition stream)
-             (format stream "Unbound Termis name ~S"
-                     (termis-name-value (unbound-name-error-name condition))))))
+             (format stream "Unbound Verona name ~S"
+                     (verona-name-value (unbound-name-error-name condition))))))
 
 (define-condition not-callable-error (error)
   ((value :initarg :value :reader not-callable-error-value))
   (:report (lambda (condition stream)
-             (format stream "Termis value ~S is not callable"
+             (format stream "Verona value ~S is not callable"
                      (not-callable-error-value condition)))))
 
 (define-condition invalid-macro-result-error (error)
   ((value :initarg :value :reader invalid-macro-result-error-value))
   (:report (lambda (condition stream)
-             (format stream "A Termis macro returned ~S, not syntax"
+             (format stream "A Verona macro returned ~S, not syntax"
                      (invalid-macro-result-error-value condition)))))
 
 (defclass environment ()
@@ -67,9 +67,9 @@ IMPLEMENTATION must return one SYNTAX object."
 (defun environment-bind (environment name value)
   "Bind NAME to VALUE in ENVIRONMENT, replacing its local binding if present."
   (check-type environment environment)
-  (check-type name termis-name)
+  (check-type name verona-name)
   (let ((binding (assoc name (environment-bindings environment)
-                        :test #'termis-name=)))
+                        :test #'verona-name=)))
     (if binding
         (setf (cdr binding) value)
         (push (cons name value) (environment-bindings environment)))
@@ -80,7 +80,7 @@ IMPLEMENTATION must return one SYNTAX object."
   (loop for current = environment then (environment-parent current)
         while current
         for binding = (assoc name (environment-bindings current)
-                             :test #'termis-name=)
+                             :test #'verona-name=)
         when binding
           do (return (values (cdr binding) t))
         finally (return (values nil nil))))
@@ -88,7 +88,7 @@ IMPLEMENTATION must return one SYNTAX object."
 (defun environment-lookup (environment name)
   "Resolve NAME through ENVIRONMENT and its lexical parents."
   (check-type environment environment)
-  (check-type name termis-name)
+  (check-type name verona-name)
   (multiple-value-bind (value foundp) (environment-find environment name)
     (if foundp
         value
@@ -102,58 +102,58 @@ IMPLEMENTATION must return one SYNTAX object."
 (defun macro-at-head (syntax environment)
   "Return the macro bound by SYNTAX's list head, if it has one."
   (let ((datum (syntax-datum syntax)))
-    (when (termis-list-p datum)
-      (let ((elements (termis-list-elements datum)))
+    (when (verona-list-p datum)
+      (let ((elements (verona-list-elements datum)))
         (when elements
           (let ((head (syntax-datum (first elements))))
-            (when (or (termis-name-p head) (qualified-name-p head))
+            (when (or (verona-name-p head) (qualified-name-p head))
               ;; Qualified macro names are represented structurally in syntax,
               ;; but evaluator bindings intentionally remain ordinary local
               ;; keys.  The compiler installs this unambiguous local spelling
               ;; only for exported imported macros.
               (when (qualified-name-p head)
-                (setf head (make-termis-name (qualified-name-string head))))
+                (setf head (make-verona-name (qualified-name-string head))))
               (multiple-value-bind (value foundp)
                   (environment-find environment head)
-                (and foundp (termis-macro-p value) value)))))))))
+                (and foundp (verona-macro-p value) value)))))))))
 
 (defun expand (syntax environment)
   "Recursively expand a macro in SYNTAX's outermost position.
 
 Expansion intentionally stops once the outer form is not a macro; definition
-forms such as %FUNCTION are therefore left as Termis syntax for later processing."
+forms such as %FUNCTION are therefore left as Verona syntax for later processing."
   (check-type syntax syntax)
   (check-type environment environment)
   (let ((macro (macro-at-head syntax environment)))
     (if macro
-        (let* ((arguments (rest (termis-list-elements (syntax-datum syntax))))
+        (let* ((arguments (rest (verona-list-elements (syntax-datum syntax))))
                (result (let ((*macro-expansion-syntax* syntax))
-                         (apply (termis-macro-implementation macro) arguments))))
+                         (apply (verona-macro-implementation macro) arguments))))
           (unless (typep result 'syntax)
             (error 'invalid-macro-result-error :value result))
           (expand result environment))
         syntax)))
 
 (defun evaluate-list (syntax environment)
-  (let* ((elements (termis-list-elements (syntax-datum syntax)))
+  (let* ((elements (verona-list-elements (syntax-datum syntax)))
          (head (first elements)))
     (unless head
       (error 'not-callable-error :value (syntax-datum syntax)))
     (let ((callable (evaluate head environment)))
-      (unless (termis-function-p callable)
+      (unless (verona-function-p callable)
         (error 'not-callable-error :value callable))
-      (apply (termis-function-implementation callable)
+      (apply (verona-function-implementation callable)
              (mapcar (lambda (argument) (evaluate argument environment))
                      (rest elements))))))
 
 (defun evaluate (syntax environment)
-  "Evaluate source-aware Termis SYNTAX in ENVIRONMENT and return a value."
+  "Evaluate source-aware Verona SYNTAX in ENVIRONMENT and return a value."
   (check-type syntax syntax)
   (check-type environment environment)
   (let ((datum (syntax-datum syntax)))
-    (cond ((termis-name-p datum)
+    (cond ((verona-name-p datum)
            (environment-lookup environment datum))
-          ((termis-list-p datum)
+          ((verona-list-p datum)
            (let ((expanded (expand syntax environment)))
              (if (eq expanded syntax)
                  (evaluate-list syntax environment)
@@ -166,24 +166,24 @@ forms such as %FUNCTION are therefore left as Termis syntax for later processing
 
 The arguments remain their original syntax objects: this layer deliberately
 does not inspect, evaluate, or otherwise interpret declaration contents."
-  (make-termis-macro
+  (make-verona-macro
    (lambda (&rest arguments)
      (let* ((form *macro-expansion-syntax*)
-            (elements (termis-list-elements (syntax-datum form)))
+            (elements (verona-list-elements (syntax-datum form)))
             (head (syntax-with-datum (first elements)
-                                     (make-termis-name primitive-name))))
+                                     (make-verona-name primitive-name))))
        (syntax-with-datum form
-                          (apply #'make-termis-list head arguments))))))
+                          (apply #'make-verona-list head arguments))))))
 
 (defun make-bootstrap-environment ()
-  "Create the evaluator environment and its standard Termis definition macros."
+  "Create the evaluator environment and its standard Verona definition macros."
   (let ((environment (make-environment)))
     ;; This primitive exists solely to prove ordinary and nested calls.  Its
-    ;; binding key is a Termis name, never the host's CL:+ symbol.
-    (environment-bind environment (make-termis-name "+")
-                      (make-termis-function #'+))
+    ;; binding key is a Verona name, never the host's CL:+ symbol.
+    (environment-bind environment (make-verona-name "+")
+                      (make-verona-function #'+))
     ;; The compiler recognizes only the %... forms.  The ordinary declaration
-    ;; vocabulary belongs to this Termis-level environment instead.
+    ;; vocabulary belongs to this Verona-level environment instead.
     (dolist (definition '( ("type" . "%type")
                            ("function" . "%function")
                            ("external-function" . "%external-function")
@@ -192,6 +192,6 @@ does not inspect, evaluate, or otherwise interpret declaration contents."
                            ("variable" . "%variable")
                            ("generic" . "%generic")
                            ("implementation" . "%implementation")))
-      (environment-bind environment (make-termis-name (car definition))
+      (environment-bind environment (make-verona-name (car definition))
                         (bootstrap-definition-macro (cdr definition))))
     environment))

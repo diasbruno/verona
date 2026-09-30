@@ -1,0 +1,348 @@
+# Verona API reference
+
+This reference covers the public surface of Verona 0.x: the `.vrn` language,
+the Common Lisp embedding API, the LLVM backend, and the native compiler
+driver.  Names in the `verona` package are available as `verona:name`; driver
+and backend names use `verona.compiler:name` and
+`verona.backend.llvm:name` respectively.
+
+The compiler exposes source-aware and semantic objects deliberately.  The
+front-end functions below are suitable for tools, tests, and embeddings; the
+semantic and LLVM layers are advanced APIs for analyzers and alternate
+backends.
+
+## Command-line compiler
+
+`verona compile SOURCE [options]` compiles one root `.vrn` module and prints
+the produced artifact path.  `verona build TARGET OUTPUT-DIRECTORY` reads a
+`verona.build` file from the current directory, builds `TARGET`, and prints its
+artifact path.
+
+| Option | Meaning |
+| --- | --- |
+| `-o PATH`, `--output PATH` | Write the artifact to `PATH`. |
+| `--emit object` | Emit an object file. |
+| `--emit executable` | Emit a native executable (the default). `main` must have type `() -> unit`. |
+| `--emit static-library` | Emit `libNAME.a`. |
+| `--emit shared-library` | Emit `libNAME.dylib` on Darwin or `libNAME.so` on Linux. |
+| `--target TRIPLE` | Compile for an LLVM target triple. |
+| `--cpu CPU` | Select the target CPU; defaults to `generic`. |
+| `--features FEATURES` | Pass the LLVM target-feature string. |
+| `-l NAME`, `--library NAME` | Link a native library as `-lNAME`. Repeatable. |
+| `-L PATH`, `--library-path PATH` | Add a native library search path. Repeatable. |
+| `--framework NAME` | Link a Darwin framework. Repeatable; rejected on non-Darwin targets. |
+
+The development shell supplies `VERONA_CL_LLVM`, `VERONA_LINKER`, and
+`VERONA_AR`.  Override the latter two only to deliberately use another native
+linker or archiver.
+
+## Verona language
+
+### Values and types
+
+| Item | Meaning |
+| --- | --- |
+| `unit` | The sole unit value and the unit type. |
+| `true`, `false` | Boolean literals of type `bool`. |
+| Signed integers | `i8`, `i16`, `i32`, `i64`, and pointer-sized `isize`. |
+| Unsigned integers | `u8`, `u16`, `u32`, `u64`, and pointer-sized `usize`. |
+| Floating point | `f32` and `f64`. |
+| `string` | String type. |
+| `void` | C ABI-only no-value result type; it is not a Verona value type. |
+| `(pointer TYPE)` | Pointer type. Pointers to `void` cannot be dereferenced. |
+| `(function (TYPE...) RESULT)` | Function type syntax. |
+
+Product types use `(type Name ((field Type) ...))`.  Sum types use
+`(type Name (sum (case Type...) ...))`; a zero-payload case is written
+`(case)`.  A product is constructed as `(Name value...)`, a sum as
+`(case value...)`, and product fields are read with `(field value field-name)`.
+
+### Top-level forms
+
+| Form | Purpose |
+| --- | --- |
+| `(type NAME BODY)` | Define a product or sum type. |
+| `(function NAME ((parameter TYPE) ...) RESULT BODY)` | Define a function. |
+| `(external-function NAME "c_name" (TYPE...) RESULT)` | Declare a C function. Parameters must use scalar or pointer C ABI types; a result may also be `void`. |
+| `(macro NAME (parameter ...) BODY)` | Define a compile-time macro. Parameters and result are syntax objects. |
+| `(constant NAME TYPE VALUE)` | Define an immutable global. |
+| `(variable NAME TYPE INITIALIZER)` | Define a mutable global. |
+| `(generic NAME (parameter ...))` | Declare a generic callable by arity. |
+| `(implementation NAME ((parameter TYPE) ...) RESULT BODY)` | Add an exact-type implementation to a generic. |
+| `(import module.name)` | Load a module from the module search path. |
+| `(import module.name :as alias)` | Load a module and use `alias:member` to qualify exports. |
+| `(export NAME...)` | Make declarations available to importing modules. |
+| `(native-export NAME)` | Export a function with its Verona name to C. |
+| `(native-export NAME "c_name")` | Export a function to C with an explicit external name. |
+
+Macros may return one syntax object or a top-level sequence of definitions.
+Imports, exports, and native exports are only valid at the top level.
+
+### Expressions and callable operations
+
+| Form or function | Signature / behavior |
+| --- | --- |
+| `(let ((name Type initializer) ...) body)` | Introduces sequential lexical bindings. Each initializer is resolved before its own name enters scope. |
+| `(match value (pattern expression) ...)` | Exhaustive pattern match. Supports `true`, `false`, integer literals, `_`, bindings, and sum constructor patterns. |
+| `(return value)` | Return from the enclosing function. |
+| `(do expression...)` | Evaluate expressions in order and return the last value. |
+| `(& place)`, `(address-of place)` | Create a pointer to an addressable place. |
+| `(deref pointer)`, `(dereference pointer)` | Turn a non-void pointer into a place. |
+| `(load place)` | Read a place. |
+| `(assign place value)`, `(store place value)` | Write a writable place. |
+| `(cast Type value)` | Explicit pointer cast. |
+| `+`, `-`, `*`, `/` | Generic arithmetic for every signed/unsigned integer type and for `f32`/`f64`; operands must have the same type. |
+| `==`, `!=`, `<`, `<=`, `>`, `>=` | Generic comparison for the same numeric type families; result is `bool`. Float comparisons are ordered, so a NaN operand makes the comparison false. |
+
+The compiler also exposes concrete bootstrap primitives.  They are useful for
+compiler tests and generated code, not typical `.vrn` programs:
+
+| Primitive family | Available names |
+| --- | --- |
+| Integer arithmetic | `%+-primitive-T`, `%-primitive-T`, `%*-primitive-T`, `%/-primitive-T` for `T` in `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`. |
+| Integer comparison | `%=`, `%/=`, `%<`, `%<=`, `%>`, `%>=` with the same `-primitive-T` suffix. |
+| Float arithmetic and comparison | The same arithmetic and comparison spellings with `-primitive-f32` and `-primitive-f64`. |
+| Boolean operations | `%not-primitive-bool`, `%and-primitive-bool`, `%or-primitive-bool`, `%=-primitive-bool`, and `%/=-primitive-bool`. |
+| Integer width conversion | `%sext-primitive-S-D`, `%zext-primitive-S-D`, and `%trunc-primitive-S-D`, for valid widening, zero/sign-extending, and narrowing integer pairs. |
+| Integer/float conversion | `%sitofp-primitive-I-F`, `%uitofp-primitive-U-F`, `%fptosi-primitive-F-I`, `%fptoui-primitive-F-U`, `%fext-primitive-f32-f64`, and `%ftrunc-primitive-f64-f32`. |
+
+## Common Lisp front-end API
+
+### Source and syntax
+
+| Function | Description |
+| --- | --- |
+| `make-source name contents` | Create a `source` from diagnostic name and text. |
+| `source-from-file pathname` | Read a file into a source object; signals `source-error` on I/O failure. |
+| `make-syntax datum source start end` | Create a source-spanned syntax object. |
+| `syntax-with-datum syntax datum` | Copy `syntax`'s source span while replacing its datum. |
+| `read-source source` | Parse every form in a source, returning source-aware syntax objects. |
+| `make-verona-name value` | Make a case-sensitive identifier. |
+| `verona-name= left right` | Compare two identifiers by exact spelling. |
+| `make-module-name &rest components` | Make a non-empty dotted module identity from Verona names. |
+| `module-name= left right` | Compare module identities component by component. |
+| `module-name-string name` | Render a module identity as `component.component`. |
+| `make-qualified-name qualifier name` | Build a structured `module:name` reference. |
+| `qualified-name-string name` | Render a qualified name. |
+| `make-verona-list &rest elements` | Make a list datum from syntax elements. |
+
+Reader predicates and accessors are also public: `source-name`,
+`source-contents`, `source-location-offset`, `source-location-line`,
+`source-location-column`, `syntax-datum`, `syntax-source`, `syntax-start`,
+`syntax-end`, `verona-name-p`, `verona-name-value`, `module-name-p`,
+`module-name-components`, `qualified-name-p`, `qualified-name-qualifier`,
+`qualified-name-name`, `verona-list-p`, and `verona-list-elements`.
+`verona-symbol-p` and `verona-symbol-name` are compatibility aliases for the
+Verona-name API.  `unit-literal-p`, `verona-boolean-literal-p`, and
+`verona-boolean-literal-value` inspect reader literal datums.
+
+### Compile-time evaluator
+
+| Function | Description |
+| --- | --- |
+| `make-environment &optional parent` | Create a lexical evaluator environment. |
+| `environment-bind environment name value` | Bind or replace a value in one environment. |
+| `environment-lookup environment name` | Resolve a name through parent environments; signals `unbound-name-error` when absent. |
+| `environment-child environment` | Create a child environment. |
+| `make-verona-function implementation` | Wrap a host function that receives evaluated Verona values. |
+| `make-verona-macro implementation` | Wrap a host function that receives unevaluated syntax and returns syntax. |
+| `evaluate syntax environment` | Evaluate a bootstrap evaluator expression. |
+| `expand syntax environment` | Expand macros at a syntax form's head. |
+| `make-bootstrap-environment` | Create the evaluator environment containing the standard definition-form macros. |
+
+Predicates `verona-callable-p`, `verona-function-p`, and `verona-macro-p`
+classify evaluator callables.  `environment-parent`,
+`verona-function-implementation`, and `verona-macro-implementation` retrieve
+their associated objects.
+
+### Compilation and modules
+
+| Function | Description |
+| --- | --- |
+| `make-compiler &key search-paths` | Create a front end. Search paths are used by `compile-file` and `compile-module`. |
+| `compile-string compiler contents &key name target pointer-width` | Compile in-memory source into a compilation unit. |
+| `compile-file compiler pathname &key target pointer-width` | Compile a root `.vrn` file and its imports. |
+| `compile-module compiler name &key target pointer-width` | Find and compile a named module from the compiler search paths. |
+| `find-declaration unit name` | Return a declaration and a presence flag from the unit namespace. |
+| `module-lookup module name` | Compatibility alias for `find-declaration`. |
+| `unit-declarations unit` | Return declarations in discovery order. |
+| `register-declaration unit declaration` | Add a declaration, rejecting duplicate non-implementation names. |
+| `module-find-export module name` | Return an exported declaration, or `nil`. |
+| `module-loader-load loader name` | Load one module recursively through a `module-loader`. |
+
+The compiler/unit/module accessor functions are `compiler-search-paths`,
+`compilation-unit-source`, `compilation-unit-forms`,
+`compilation-unit-declarations`, `compilation-unit-namespace`,
+`compilation-unit-environment`, `compilation-unit-compile-time-environment`,
+`compilation-unit-semantic-program`, `module-name`, `module-pathname`,
+`module-identity-explicit-p`, `module-imports`, `module-exports`,
+`module-native-export-specs`, `module-source`, `module-forms`,
+`module-declarations`, `module-namespace`, `module-environment`,
+`module-loader-search-paths`, `module-loader-loaded-modules`,
+`module-graph-modules`, and `module-graph-edges`.
+
+`import-module`, `import-alias`, `native-export-spec-name`,
+`native-export-spec-external-name`, and `native-export-spec-source` inspect
+module edges and C-export requests.
+
+### Declaration, semantic, and type inspection
+
+Compilation creates source declarations first, then semantic declarations and
+expressions.  The following accessor families expose every field without
+requiring slot access:
+
+| Family | Public accessors |
+| --- | --- |
+| Source declarations | `declaration-name`, `declaration-source`, `declaration-expanded-syntax`, `declaration-module`, `declaration-compilation-unit`; `type-declaration-body`; `function-declaration-parameters`, `function-declaration-return-type`, `function-declaration-body`; `external-function-declaration-external-name`, `external-function-declaration-parameter-types`, `external-function-declaration-result-type`; `macro-declaration-parameters`, `macro-declaration-body`; `constant-declaration-type`, `constant-declaration-value`; `variable-declaration-type`, `variable-declaration-initializer`; `generic-declaration-parameters`, `generic-declaration-arity`; `implementation-declaration-generic-name`, `implementation-declaration-parameters`, `implementation-declaration-return-type`, `implementation-declaration-body`. |
+| Scopes and programs | `make-semantic-scope`, `semantic-scope-child`, `semantic-scope-bind`, `semantic-scope-find`, `semantic-scope-lookup`, `semantic-scope-parent`, `semantic-scope-owning-program`, `semantic-scope-owning-type-context`, `semantic-scope-owning-function`; `semantic-program-module-scope-for`, `semantic-program-declaration`, `make-bootstrap-semantic-scope`; `semantic-program-bootstrap-scope`, `semantic-program-module-scope`, `semantic-program-declarations`, `semantic-program-type-context`, `program-entry-module`, `program-modules`, `program-module-graph`, `program-target`, `semantic-program-native-exports`. |
+| Bindings and generics | `semantic-binding-name`; parameter, pattern, and let-binding accessors prefixed `parameter-binding-`, `pattern-binding-`, and `let-binding-`; `generic-name`, `generic-arity`, `generic-implementations`, `generic-find-implementation`; `generic-binding-generic`; and generic-implementation accessors prefixed `generic-implementation-`. |
+| Semantic declarations | `semantic-declaration-source-declaration`; accessors prefixed `semantic-type-declaration-`, `semantic-constant-declaration-`, `semantic-variable-declaration-`, `semantic-function-declaration-`, `semantic-external-function-declaration-`, and `semantic-generic-implementation-`. |
+| Expressions and patterns | `semantic-expression-syntax`, `semantic-expression-type`, `expression-syntax`, `expression-source`, `expression-type`; accessors prefixed `semantic-reference-`, `semantic-call-`, `external-call-expression-`, `primitive-call-`, `conversion-expression-`, `pointer-cast-expression-`, `construct-expression-`, `sum-construct-expression-`, `field-expression-`, `sequence-expression-`, `let-expression-`, `address-expression-`, `dereference-expression-`, `load-expression-`, `assignment-expression-`, `store-expression-`, `return-expression-`, `pattern-`, `literal-pattern-`, `binding-pattern-`, `constructor-pattern-`, `match-case-`, and `match-expression-`. |
+
+The analysis functions are `resolve-type`, `resolve-types`, `infer-expression`,
+`check-expression`, `build-semantic-expression`, `resolve-compilation-unit`,
+`resolve-program`, `same-type-p`, `compatible-p`, `validate-for-backend`,
+`backend-representable-type-p`, and `verona-type-name`.  They operate on the
+advanced semantic representation and may signal the exported semantic error
+conditions.
+
+Advanced declaration-pipeline functions are `definition-form-p`,
+`expand-top-level`, `process-definition`, `make-top-level-expansion-result`,
+and `top-level-expansion-result-definitions`.  They are useful when embedding
+the definition collector rather than calling `compile-string` or
+`compile-file`.
+
+Primitive inspection uses `builtin-type-binding-type`,
+`builtin-intrinsic-binding-type`, `primitive-binding-operation`, and
+`primitive-operation-identity`, `primitive-operation-name`,
+`primitive-operation-parameter-types`, `primitive-operation-result-type`,
+`primitive-operation-kind`, and `primitive-operation-nan-semantics`.
+`native-export-binding-function` and `native-export-binding-external-name`
+inspect resolved C exports.
+
+`make-type-context` makes canonical types. Its constructors/cache accessors
+are `type-context-unit-type`, `type-context-void-type`, `type-context-never-type`,
+`type-context-unit-value`, `type-context-pointer-width`,
+`type-context-unit-representation-type`, `type-context-boolean-type`,
+`type-context-string-type`, `type-context-integer-type`,
+`type-context-float-type`, `type-context-pointer-type`,
+`type-context-function-type`, `type-context-defined-type`,
+`type-context-product-type`, and `type-context-sum-type`.
+`unit-machine-representation` returns the target-sized unit representation.
+
+Type accessors are `integer-type-signed`, `integer-type-width`,
+`float-type-width`, `pointer-type-target`, `pointer-type-pointee`,
+`function-type-parameters`, `function-type-result`,
+`defined-type-declaration`, `product-type-fields`, `product-type-find-field`,
+`product-field-name`, `product-field-type`, `product-field-index`,
+`product-field-source`, `sum-type-alternatives`, `sum-type-find-alternative`,
+`sum-alternative-sum-type`, `sum-alternative-name`, `sum-alternative-index`,
+`sum-alternative-payload-types`, and `sum-alternative-source`.
+
+## LLVM backend API
+
+Use this layer after `compile-string` or `compile-file`, passing the unit's
+`compilation-unit-semantic-program` to `generate-llvm`.
+
+| Function | Description |
+| --- | --- |
+| `native-target-triple` | Return LLVM's host target triple. |
+| `make-target-configuration &key triple cpu features relocation-model code-model` | Describe an LLVM target. Relocation values are `:default`, `:static`, `:pic`, and `:dynamic-no-pic`; code-model values are `:default`, `:jit-default`, `:small`, `:kernel`, `:medium`, and `:large`. |
+| `make-llvm-backend &key module-name target-configuration optimization-level` | Allocate an LLVM module, builder, target machine, and canonical type context. |
+| `generate-llvm program &key module-name target-configuration optimization-level` | Lower a semantic program into a populated backend. |
+| `verify-llvm-module backend` | Signal on invalid LLVM IR; return the backend when valid. |
+| `print-llvm-module backend` | Return LLVM textual IR. |
+| `emit-object backend output` | Verify and emit an object file. |
+| `emit-output program output &key configuration` | Emit IR, an object, or an executable according to `codegen-configuration-output-kind`. |
+| `build-executable program output &key configuration` | Legacy convenience path that lowers and links an executable. |
+| `add-platform-entry-wrapper backend program` | Add the C `main` adapter for a Verona `main : () -> unit`. |
+| `validate-executable-entry-point program` | Validate that executable entry-point contract. |
+| `lower-type backend type` | Lower a canonical Verona type to LLVM. |
+| `emit-value backend expression` | Emit an LLVM value for a resolved expression. |
+| `emit-place backend expression` | Emit the LLVM address for an addressable expression. |
+| `hide-verona-symbols backend program` | Give non-native-exported functions internal LLVM visibility. |
+
+Backend configuration/readback accessors are `llvm-backend-context`,
+`llvm-backend-module`, `llvm-backend-builder`, `llvm-backend-target-triple`,
+`llvm-backend-data-layout`, `llvm-backend-pointer-width`,
+`llvm-backend-target-machine`, `llvm-backend-target-configuration`,
+`target-configuration-triple`, `target-configuration-cpu`,
+`target-configuration-features`, `target-configuration-relocation-model`,
+`target-configuration-code-model`, `make-codegen-configuration`,
+`codegen-configuration-target`, `codegen-configuration-optimization-level`,
+`codegen-configuration-relocation-model`, `codegen-configuration-code-model`,
+`codegen-configuration-output-kind`, `make-linker-configuration`,
+`linker-configuration-executable`, `linker-configuration-arguments`,
+`linker-configuration-libraries`, `linker-configuration-library-paths`, and
+`linker-configuration-framework-paths`.
+
+## Native compiler-driver and build API
+
+| Function | Description |
+| --- | --- |
+| `resolve-compilation-target &key triple cpu features` | Resolve LLVM target data, pointer width, platform, and object format before front-end analysis. |
+| `make-link-options &key libraries library-search-paths frameworks` | Build native linker options. |
+| `make-native-toolchain &key compiler archiver` | Create the default linker/archiver adapter. Defaults read `VERONA_LINKER` and `VERONA_AR`. |
+| `make-compiler-driver &key search-paths target optimization-level toolchain` | Configure a reusable native compiler driver. |
+| `compile-root driver root &key artifact-kind output link-options` | Compile a root module to `:object`, `:executable`, `:static-library`, or `:shared-library`. |
+| `compile-file driver pathname &rest arguments` | Alias-style convenience entry to `compile-root`. |
+| `default-output-path root kind target` | Compute the platform-correct default artifact pathname. |
+| `toolchain-emit-object toolchain backend output` | Generic protocol operation for object production. |
+| `toolchain-link-executable toolchain object output target options` | Generic protocol operation for executable linking. |
+| `toolchain-archive-static-library toolchain object output target` | Generic protocol operation for static library creation. |
+| `toolchain-link-shared-library toolchain object output target options` | Generic protocol operation for shared-library linking. |
+
+Driver accessors are `compiler-driver-search-paths`, `compiler-driver-target`,
+`compiler-driver-optimization-level`, `compiler-driver-toolchain`,
+`compilation-target-triple`, `compilation-target-cpu`,
+`compilation-target-features`, `compilation-target-data-layout`,
+`compilation-target-pointer-width`, `compilation-target-object-format`,
+`compilation-target-platform`, `artifact-kind`, `artifact-path`,
+`artifact-target`, `link-options-libraries`, `link-options-library-search-paths`,
+and `link-options-frameworks`.
+
+### Declarative builds
+
+`verona.build` accepts an `(executable NAME ...)`, `(static-library NAME ...)`,
+or `(shared-library NAME ...)` target. Every target needs exactly one
+`(root module.name)`. Optional clauses are `(module-path "PATH")`,
+`(target native)` or `(target "TRIPLE")`, `(optimize 0|1|2|3)`,
+`(library "NAME")`, `(library-path "PATH")`, and `(framework "NAME")`.
+
+| Function | Description |
+| --- | --- |
+| `make-build-name value`, `build-name=` | Create and compare target names. |
+| `make-build-invocation target-name output-directory` | Select a target and output directory for a build invocation. |
+| `parse-build-source source &key directory` | Parse build configuration without evaluating Verona code. |
+| `parse-build-file pathname` | Read and parse a `verona.build` file. |
+| `find-build-target file name` | Retrieve one parsed target. |
+| `locate-build-file &optional directory` | Find `verona.build` in a directory. |
+| `build-target-artifact-kind target` | Return the target's driver artifact kind. |
+| `execute-build file invocation &key toolchain` | Validate and build the selected target. |
+
+Build accessors are `build-name-p`, `build-name-value`, `build-file-source`,
+`build-file-targets`, `build-target-name`, `build-target-root-module`,
+`build-target-module-paths`, `build-target-compilation-target`,
+`build-target-optimization`, `build-target-link-options`,
+`build-invocation-target-name`, and `build-invocation-output-directory`.
+
+## Errors
+
+All APIs signal Common Lisp conditions rather than returning error sentinels.
+The most useful common readers are `source-error-message`,
+`verona-read-error-source`, `verona-read-error-location`,
+`verona-read-error-message`, `definition-error-syntax`,
+`semantic-error-syntax`, `semantic-error-message`, and
+`compiler-driver-error-message`.
+
+Use the exported condition types to handle a specific layer: source/reader
+errors (`source-error`, `verona-read-error`); declaration and module errors
+(`definition-error`, `duplicate-declaration-error`, `module-error`); semantic
+errors (`semantic-error`, `type-mismatch-error`, `unresolved-name-error`, and
+match/type/generic subtypes); LLVM errors (`llvm-backend-error`,
+`target-configuration-error`, `object-emission-error`, `entry-point-error`,
+`linker-error`); and driver/build errors (`compiler-driver-error`,
+`toolchain-failure`, `build-error`).  Error-specific readers share the
+condition's hyphenated prefix, for example `type-mismatch-error-actual`,
+`type-mismatch-error-expected`, `toolchain-failure-stderr`, and
+`build-error-message`.

@@ -1,15 +1,15 @@
-(defpackage #:termis.compiler
+(defpackage #:verona.compiler
   (:use #:cl)
   (:shadow #:compile-file)
-  (:import-from #:termis
+  (:import-from #:verona
                 #:make-compiler #:compiler-search-paths
                 #:compilation-unit-semantic-program #:program-target)
-  (:import-from #:termis.backend.llvm
+  (:import-from #:verona.backend.llvm
                 #:make-target-configuration #:native-target-triple
                 #:target-configuration-triple #:target-configuration-cpu
                 #:target-configuration-features #:generate-llvm
                 #:verify-llvm-module #:emit-object #:add-platform-entry-wrapper
-                #:hide-termis-symbols
+                #:hide-verona-symbols
                 #:llvm-backend-pointer-width #:llvm-backend-data-layout)
   (:export
    #:compiler-driver #:make-compiler-driver #:compiler-driver-search-paths

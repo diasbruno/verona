@@ -1,9 +1,9 @@
-(in-package #:termis/tests)
+(in-package #:verona/tests)
 
-(in-suite :termis)
+(in-suite :verona)
 
 (defun native-test-path (type)
-  (merge-pathnames (format nil "termis-native-~A.~A" (gensym "TEST-") type)
+  (merge-pathnames (format nil "verona-native-~A.~A" (gensym "TEST-") type)
                    (uiop:temporary-directory)))
 
 (defun compile-and-run-native (source)
@@ -12,7 +12,7 @@
          (program (compilation-unit-semantic-program unit)))
     (unwind-protect
          (progn
-           (termis.backend.llvm:build-executable program executable)
+           (verona.backend.llvm:build-executable program executable)
            (nth-value 2 (uiop:run-program (list (namestring executable))
                                            :output :string :error-output :string
                                            :ignore-error-status t)))
@@ -20,21 +20,21 @@
         (delete-file executable)))))
 
 (test creates-and-prints-an-empty-llvm-module
-  (let ((backend (termis.backend.llvm:make-llvm-backend :module-name "empty")))
-    (is (search "ModuleID = 'empty'" (termis.backend.llvm:print-llvm-module backend)))
-    (is (eq backend (termis.backend.llvm:verify-llvm-module backend)))))
+  (let ((backend (verona.backend.llvm:make-llvm-backend :module-name "empty")))
+    (is (search "ModuleID = 'empty'" (verona.backend.llvm:print-llvm-module backend)))
+    (is (eq backend (verona.backend.llvm:verify-llvm-module backend)))))
 
 (test lowers-forward-function-calls-through-cl-llvm
   (let* ((unit (compile-string
                 (make-compiler)
                 (format nil
                         "(function add ((a i64) (b i64)) i64 (%+-primitive-i64 a b))~%(function main () i64 (add 20 22))")))
-         (backend (termis.backend.llvm:generate-llvm
+         (backend (verona.backend.llvm:generate-llvm
                    (compilation-unit-semantic-program unit)))
-         (ir (termis.backend.llvm:print-llvm-module backend)))
-    (is (search "define i64 @__termis_000061000064000064" ir))
+         (ir (verona.backend.llvm:print-llvm-module backend)))
+    (is (search "define i64 @__verona_000061000064000064" ir))
     (is (search "add i64" ir))
-    (is (search "call i64 @__termis_000061000064000064(i64 20, i64 22)" ir))))
+    (is (search "call i64 @__verona_000061000064000064(i64 20, i64 22)" ir))))
 
 (test lowers-and-executes-generic-dispatch
   (let ((source
@@ -47,11 +47,11 @@
 
 (test lowers-unit-to-the-target-pointer-width
   (let* ((unit (compile-string (make-compiler) "(function noop () unit unit)"))
-         (backend (termis.backend.llvm:generate-llvm
+         (backend (verona.backend.llvm:generate-llvm
                    (compilation-unit-semantic-program unit)))
-         (ir (termis.backend.llvm:print-llvm-module backend)))
-    (is (= 64 (termis.backend.llvm:llvm-backend-pointer-width backend)))
-    (is (search "define i64 @__termis_00006E00006F00006F000070()" ir))
+         (ir (verona.backend.llvm:print-llvm-module backend)))
+    (is (= 64 (verona.backend.llvm:llvm-backend-pointer-width backend)))
+    (is (search "define i64 @__verona_00006E00006F00006F000070()" ir))
     (is (search "ret i64 0" ir))))
 
 (test lowers-external-c-declarations-with-explicit-linker-names
@@ -60,28 +60,28 @@
                 "(external-function release \"free\" ((pointer void)) void)
                  (external-function string-length \"strlen\" ((pointer i8)) usize)
                  (function main () i64 0)"))
-         (backend (termis.backend.llvm:generate-llvm
+         (backend (verona.backend.llvm:generate-llvm
                    (compilation-unit-semantic-program unit)))
-         (ir (termis.backend.llvm:print-llvm-module backend)))
+         (ir (verona.backend.llvm:print-llvm-module backend)))
     (is (search "declare void @free(" ir))
     (is (search "@strlen(" ir))
-    (is (not (search "__termis_000066000072000065000065" ir)))))
+    (is (not (search "__verona_000066000072000065000065" ir)))))
 
 (test emits-a-native-object-file
   (let* ((object (native-test-path "o"))
          (unit (compile-string (make-compiler) "(function answer () i64 42)"))
-         (backend (termis.backend.llvm:generate-llvm
+         (backend (verona.backend.llvm:generate-llvm
                    (compilation-unit-semantic-program unit))))
     (unwind-protect
          (progn
-           (termis.backend.llvm:emit-object backend object)
+           (verona.backend.llvm:emit-object backend object)
            (is (probe-file object))
            (is (< 0 (with-open-file (stream object :direction :input :element-type '(unsigned-byte 8))
                       (file-length stream)))))
       (when (probe-file object)
         (delete-file object)))))
 
-(test executes-native-termis-programs
+(test executes-native-verona-programs
   (is (= 0 (compile-and-run-native "(function main () i64 0)")))
   (is (= 42 (compile-and-run-native "(function main () i64 42)")))
   (is (= 42 (compile-and-run-native
@@ -110,13 +110,13 @@
                               (false (let ((x i64 (%+-primitive-i64 b 10))) x))))~%
                           (function main () i64 (max-plus-ten (sequential) (shadow)))"))
          (unit (compile-string (make-compiler) source))
-         (backend (termis.backend.llvm:generate-llvm
+         (backend (verona.backend.llvm:generate-llvm
                    (compilation-unit-semantic-program unit)))
-         (ir (termis.backend.llvm:print-llvm-module backend)))
+         (ir (verona.backend.llvm:print-llvm-module backend)))
     (is (search "add i64" ir))
     ;; Only parameter lowering creates storage in the current backend.  The
     ;; two parameter-free LET functions must therefore remain SSA-only.
-    (is (not (search "alloca" (subseq ir 0 (or (search "define i64 @__termis_00006D" ir)
+    (is (not (search "alloca" (subseq ir 0 (or (search "define i64 @__verona_00006D" ir)
                                                  (length ir))))))
     (is (= 52 (compile-and-run-native source)))))
 
@@ -130,9 +130,9 @@
                (let ((value line (line (make-point 10 20) (make-point 30 42))))
                  (end-y value)))")
 	 (unit (compile-string (make-compiler) source))
-	 (backend (termis.backend.llvm:generate-llvm
+	 (backend (verona.backend.llvm:generate-llvm
 		   (compilation-unit-semantic-program unit)))
-	 (ir (termis.backend.llvm:print-llvm-module backend)))
+	 (ir (verona.backend.llvm:print-llvm-module backend)))
     (is (search "insertvalue" ir))
     (is (search "extractvalue" ir))
     (is (= 42 (compile-and-run-native source)))))
@@ -145,9 +145,9 @@
                               (false b)))~%
                           (function main () i64 (max 20 42))"))
 	 (unit (compile-string (make-compiler) source))
-	 (backend (termis.backend.llvm:generate-llvm
+	 (backend (verona.backend.llvm:generate-llvm
 		   (compilation-unit-semantic-program unit)))
-	 (ir (termis.backend.llvm:print-llvm-module backend)))
+	 (ir (verona.backend.llvm:print-llvm-module backend)))
     (is (search "br i1" ir))
     (is (search "phi i64" ir))
     (is (= 42 (compile-and-run-native source)))))
@@ -162,8 +162,8 @@
 
 (test validates-the-executable-entry-contract
   (let ((unit (compile-string (make-compiler) "(function main () i32 0)")))
-    (signals termis.backend.llvm:entry-point-error
-       (termis.backend.llvm:build-executable
+    (signals verona.backend.llvm:entry-point-error
+       (verona.backend.llvm:build-executable
        (compilation-unit-semantic-program unit) (native-test-path "program")))))
 
 (test lowers-and-executes-sum-construction-and-constructor-patterns

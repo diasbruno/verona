@@ -1,4 +1,4 @@
-(in-package #:termis)
+(in-package #:verona)
 
 (defclass syntax ()
   ((datum :initarg :datum :reader syntax-datum)
@@ -7,7 +7,7 @@
    (end :initarg :end :reader syntax-end)))
 
 (defun make-syntax (datum source start end)
-  "Create source-aware Termis syntax for DATUM."
+  "Create source-aware Verona syntax for DATUM."
   (make-instance 'syntax :datum datum :source source :start start :end end))
 
 (defun syntax-with-datum (syntax datum)
@@ -27,19 +27,19 @@
               (source-location-line start)
               (source-location-column start)))))
 
-(defstruct (termis-name (:constructor make-termis-name (value)))
-  "A case-sensitive Termis identifier, independent of Common Lisp symbols."
+(defstruct (verona-name (:constructor make-verona-name (value)))
+  "A case-sensitive Verona identifier, independent of Common Lisp symbols."
   (value "" :type string))
 
 (defstruct (module-name (:constructor %make-module-name (components)))
-  "The semantic identity of a Termis module.
+  "The semantic identity of a Verona module.
 
-COMPONENTS are Termis names, never host symbols or filesystem pathnames."
+COMPONENTS are Verona names, never host symbols or filesystem pathnames."
   (components '() :type list))
 
 (defun make-module-name (&rest components)
   (dolist (component components)
-    (check-type component termis-name))
+    (check-type component verona-name))
   (when (null components)
     (error "a module name requires at least one component"))
   (%make-module-name components))
@@ -48,54 +48,54 @@ COMPONENTS are Termis names, never host symbols or filesystem pathnames."
   (and (module-name-p left) (module-name-p right)
        (= (length (module-name-components left))
           (length (module-name-components right)))
-       (every #'termis-name= (module-name-components left)
+       (every #'verona-name= (module-name-components left)
               (module-name-components right))))
 
 (defun module-name-string (name)
   (check-type name module-name)
-  (format nil "~{~A~^.~}" (mapcar #'termis-name-value
+  (format nil "~{~A~^.~}" (mapcar #'verona-name-value
                                    (module-name-components name))))
 
 (defstruct (qualified-name (:constructor make-qualified-name (qualifier name)))
-  "A structured MODULE:NAME reference; it is deliberately not a Termis name."
+  "A structured MODULE:NAME reference; it is deliberately not a Verona name."
   (qualifier (error "qualified name needs a qualifier") :type module-name)
-  (name (error "qualified name needs a name") :type termis-name))
+  (name (error "qualified name needs a name") :type verona-name))
 
 (defun qualified-name-string (name)
   (check-type name qualified-name)
   (format nil "~A:~A" (module-name-string (qualified-name-qualifier name))
-          (termis-name-value (qualified-name-name name))))
+          (verona-name-value (qualified-name-name name))))
 
-(defun termis-name= (left right)
-  "Whether LEFT and RIGHT denote the same case-sensitive Termis name."
-  (and (termis-name-p left)
-       (termis-name-p right)
-       (string= (termis-name-value left) (termis-name-value right))))
+(defun verona-name= (left right)
+  "Whether LEFT and RIGHT denote the same case-sensitive Verona name."
+  (and (verona-name-p left)
+       (verona-name-p right)
+       (string= (verona-name-value left) (verona-name-value right))))
 
 ;; These aliases preserve the earlier reader API.
-;; New compiler code must use TERMIS-NAME rather than the misleading
-;; TERMIS-SYMBOL name.
-(deftype termis-symbol () 'termis-name)
+;; New compiler code must use VERONA-NAME rather than the misleading
+;; VERONA-SYMBOL name.
+(deftype verona-symbol () 'verona-name)
 
-(defun termis-symbol-p (object)
-  (termis-name-p object))
+(defun verona-symbol-p (object)
+  (verona-name-p object))
 
-(defun termis-symbol-name (symbol)
-  (termis-name-value symbol))
+(defun verona-symbol-name (symbol)
+  (verona-name-value symbol))
 
 (defstruct unit-literal)
 
 ;; Keep boolean spelling distinct from names before semantic analysis.  This
 ;; avoids accidentally resolving TRUE or FALSE through a lexical scope.
-(defstruct (termis-boolean-literal
-            (:constructor make-termis-boolean-literal (value)))
+(defstruct (verona-boolean-literal
+            (:constructor make-verona-boolean-literal (value)))
   (value nil :type boolean))
 
-(defstruct (termis-list (:constructor %make-termis-list (elements)))
-  "A Termis list value.  Its elements are source-aware SYNTAX objects."
+(defstruct (verona-list (:constructor %make-verona-list (elements)))
+  "A Verona list value.  Its elements are source-aware SYNTAX objects."
   (elements '() :type list))
 
-(defun make-termis-list (&rest elements)
+(defun make-verona-list (&rest elements)
   (dolist (element elements)
     (check-type element syntax))
-  (%make-termis-list elements))
+  (%make-verona-list elements))

@@ -1,4 +1,4 @@
-(in-package #:termis.compiler)
+(in-package #:verona.compiler)
 
 (defun cli-fail (control &rest arguments)
   (error 'compiler-driver-error :message (apply #'format nil control arguments)))
@@ -11,24 +11,24 @@
         (t (cli-fail "unknown artifact kind ~A" value))))
 
 (defun main (&optional (arguments (uiop:command-line-arguments)))
-  "Command line entry point for `termis compile` and `termis build`."
+  "Command line entry point for `verona compile` and `verona build`."
   (handler-case
       (let ((command (pop arguments)))
         (when (and command (string= command "build"))
           (let ((target (pop arguments)) (output-directory (pop arguments)))
-            (unless target (cli-fail "usage: termis build TARGET OUTPUT-DIRECTORY"))
-            (unless output-directory (cli-fail "termis build requires an output directory"))
-            (when arguments (cli-fail "usage: termis build TARGET OUTPUT-DIRECTORY"))
+            (unless target (cli-fail "usage: verona build TARGET OUTPUT-DIRECTORY"))
+            (unless output-directory (cli-fail "verona build requires an output directory"))
+            (when arguments (cli-fail "usage: verona build TARGET OUTPUT-DIRECTORY"))
             (let ((artifact (execute-build (parse-build-file (locate-build-file))
                                            (make-build-invocation target output-directory))))
               (format t "~A~%" (artifact-path artifact))
               (return-from main artifact))))
         (unless (and command (string= command "compile"))
-          (cli-fail "usage: termis compile SOURCE [-o OUTPUT] [--emit KIND]~%       termis build TARGET OUTPUT-DIRECTORY"))
+          (cli-fail "usage: verona compile SOURCE [-o OUTPUT] [--emit KIND]~%       verona build TARGET OUTPUT-DIRECTORY"))
         (let ((source (pop arguments)) (output nil) (kind :executable)
               (triple nil) (cpu "generic") (features "") (libraries '())
               (paths '()) (frameworks '()))
-          (unless source (cli-fail "compile requires a root Termis source file"))
+          (unless source (cli-fail "compile requires a root Verona source file"))
           (loop while arguments
                 for option = (pop arguments)
                 do (cond ((or (string= option "-o") (string= option "--output"))
@@ -58,5 +58,5 @@
             (format t "~A~%" (artifact-path artifact))
             artifact)))
     (error (condition)
-      (format *error-output* "termis: ~A~%" condition)
+      (format *error-output* "verona: ~A~%" condition)
       (uiop:quit 1))))

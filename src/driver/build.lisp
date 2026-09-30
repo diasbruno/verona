@@ -1,11 +1,11 @@
-(in-package #:termis.compiler)
+(in-package #:verona.compiler)
 
-;;; The build reader deliberately stops at syntax.  It reuses Termis's
+;;; The build reader deliberately stops at syntax.  It reuses Verona's
 ;;; source-aware S-expression reader, but no form is ever expanded or
 ;;; evaluated: the objects below are configuration data only.
 
 (defstruct (build-name (:constructor make-build-name (value)))
-  "A build-target identity, separate from Termis names and modules."
+  "A build-target identity, separate from Verona names and modules."
   (value "" :type string))
 
 (defun build-name= (left right)
@@ -18,11 +18,11 @@
   (:report (lambda (condition stream)
              (let ((syntax (build-error-syntax condition)))
                (if syntax
-                   (let ((location (termis:syntax-start syntax)))
+                   (let ((location (verona:syntax-start syntax)))
                      (format stream "~A:~D:~D: ~A"
-                             (termis:source-name (termis:syntax-source syntax))
-                             (termis:source-location-line location)
-                             (termis:source-location-column location)
+                             (verona:source-name (verona:syntax-source syntax))
+                             (verona:source-location-line location)
+                             (verona:source-location-column location)
                              (build-error-message condition)))
                    (write-string (build-error-message condition) stream))))))
 
@@ -69,35 +69,35 @@
   (error class :syntax syntax :message (apply #'format nil control arguments)))
 
 (defun build-list-elements (syntax description)
-  (let ((datum (termis:syntax-datum syntax)))
-    (unless (termis:termis-list-p datum)
+  (let ((datum (verona:syntax-datum syntax)))
+    (unless (verona:verona-list-p datum)
       (build-fail 'build-parse-error syntax "~A must be an S-expression" description))
-    (termis:termis-list-elements datum)))
+    (verona:verona-list-elements datum)))
 
 (defun build-head (syntax description)
   (let ((elements (build-list-elements syntax description)))
     (unless elements
       (build-fail 'build-parse-error syntax "~A must not be empty" description))
-    (let ((head (termis:syntax-datum (first elements))))
-      (unless (termis:termis-name-p head)
+    (let ((head (verona:syntax-datum (first elements))))
+      (unless (verona:verona-name-p head)
         (build-fail 'build-parse-error syntax "~A head must be a name" description))
-      (termis:termis-name-value head))))
+      (verona:verona-name-value head))))
 
 (defun build-module-name (syntax)
-  (let ((datum (termis:syntax-datum syntax)))
-    (unless (termis:termis-name-p datum)
+  (let ((datum (verona:syntax-datum syntax)))
+    (unless (verona:verona-name-p datum)
       (build-fail 'build-parse-error syntax "root must be a module name"))
-    (let ((text (termis:termis-name-value datum)))
+    (let ((text (verona:verona-name-value datum)))
       (when (or (string= text "")
                 (some (lambda (piece) (string= piece ""))
                       (uiop:split-string text :separator ".")))
         (build-fail 'build-parse-error syntax "root must be a dotted module name"))
-      (apply #'termis:make-module-name
-             (mapcar #'termis:make-termis-name
+      (apply #'verona:make-module-name
+             (mapcar #'verona:make-verona-name
                      (uiop:split-string text :separator "."))))))
 
 (defun build-string (syntax option)
-  (let ((datum (termis:syntax-datum syntax)))
+  (let ((datum (verona:syntax-datum syntax)))
     (unless (stringp datum)
       (build-fail 'build-parse-error syntax "~A requires a string" option))
     datum))
@@ -126,16 +126,16 @@
                module-paths))
         ((string= head "target")
          (duplicate-p target "target")
-         (let ((value (termis:syntax-datum (one-argument))))
+         (let ((value (verona:syntax-datum (one-argument))))
            (setf target
-                 (cond ((and (termis:termis-name-p value)
-                             (string= (termis:termis-name-value value) "native")) :native)
+                 (cond ((and (verona:verona-name-p value)
+                             (string= (verona:verona-name-value value) "native")) :native)
                        ((stringp value) value)
                        (t (build-fail 'build-parse-error option
                                       "target requires native or a target-triple string"))))))
         ((string= head "optimize")
          (duplicate-p optimization "optimize")
-         (let ((value (termis:syntax-datum (one-argument))))
+         (let ((value (verona:syntax-datum (one-argument))))
            (unless (and (integerp value) (<= 0 value 3))
              (build-fail 'build-parse-error option "optimize must be an integer from 0 through 3"))
            (setf optimization value)))
@@ -162,8 +162,8 @@
          (arguments (rest elements)))
     (unless (>= (length arguments) 1)
       (build-fail 'build-parse-error syntax "~A requires a target name" head))
-    (let ((name-datum (termis:syntax-datum (first arguments))))
-      (unless (termis:termis-name-p name-datum)
+    (let ((name-datum (verona:syntax-datum (first arguments))))
+      (unless (verona:verona-name-p name-datum)
         (build-fail 'build-parse-error (first arguments) "build target name must be a name"))
       (let ((root nil) (target nil) (optimization nil)
             (module-paths '()) (libraries '()) (library-paths '()) (frameworks '()))
@@ -173,9 +173,9 @@
                                 libraries library-paths frameworks)))
         (unless root
           (build-fail 'build-parse-error syntax "~A target ~A requires exactly one root option"
-                      head (termis:termis-name-value name-datum)))
+                      head (verona:verona-name-value name-datum)))
         (make-instance class
-                       :name (make-build-name (termis:termis-name-value name-datum))
+                       :name (make-build-name (verona:verona-name-value name-datum))
                        :root-module root
                        :module-paths (or (nreverse module-paths) (list directory))
                        :compilation-target (or target :native)
@@ -186,14 +186,14 @@
                                       :frameworks (nreverse frameworks)))))))
 
 (defun parse-build-source (source &key directory)
-  "Parse declarative build syntax from SOURCE without Termis evaluation."
-  (check-type source termis:source)
+  "Parse declarative build syntax from SOURCE without Verona evaluation."
+  (check-type source verona:source)
   (let* ((directory (uiop:ensure-directory-pathname
                      (or directory
                          (uiop:pathname-directory-pathname
-                          (pathname (termis:source-name source))))))
+                          (pathname (verona:source-name source))))))
          (targets (mapcar (lambda (form) (parse-artifact form directory))
-                          (termis:read-source source))))
+                          (verona:read-source source))))
     (let ((seen '()))
       (dolist (target targets)
         (when (find (build-target-name target) seen :test #'build-name=
@@ -205,7 +205,7 @@
 
 (defun parse-build-file (pathname)
   (let* ((path (pathname pathname))
-         (source (termis:source-from-file path)))
+         (source (verona:source-from-file path)))
     (parse-build-source source :directory (uiop:pathname-directory-pathname path))))
 
 (defun find-build-target (file name)
@@ -234,13 +234,13 @@
   target)
 
 (defun root-module-pathname (target)
-  (let ((filename (format nil "~A.termis"
-                         (termis:module-name-string (build-target-root-module target)))))
+  (let ((filename (format nil "~A.vrn"
+                         (verona:module-name-string (build-target-root-module target)))))
     (or (find-if #'probe-file
                  (mapcar (lambda (directory) (merge-pathnames filename directory))
                          (build-target-module-paths target)))
         (error 'build-error :message (format nil "cannot find root module ~A"
-                                             (termis:module-name-string
+                                             (verona:module-name-string
                                               (build-target-root-module target)))))))
 
 (defun execute-build (file invocation &key toolchain)
@@ -256,7 +256,7 @@
            (output-directory (build-invocation-output-directory invocation))
            (kind (build-target-artifact-kind target)))
       (validate-build-target target compilation-target)
-      (ensure-directories-exist (merge-pathnames ".termis-output" output-directory))
+      (ensure-directories-exist (merge-pathnames ".vrn-output" output-directory))
       (let* ((root (root-module-pathname target))
              (driver (make-compiler-driver
                       :search-paths (build-target-module-paths target)
@@ -272,6 +272,6 @@
                       :link-options (build-target-link-options target))))))
 
 (defun locate-build-file (&optional (directory (uiop:getcwd)))
-  (let ((path (merge-pathnames "termis.build" (uiop:ensure-directory-pathname directory))))
+  (let ((path (merge-pathnames "verona.build" (uiop:ensure-directory-pathname directory))))
     (or (probe-file path)
-        (error 'build-error :message (format nil "cannot find termis.build in ~A" directory)))))
+        (error 'build-error :message (format nil "cannot find verona.build in ~A" directory)))))

@@ -15,9 +15,9 @@ void require(bool condition, std::string_view message) {
   }
 }
 
-termis::Program analyze(std::string_view source) {
-  auto forms = termis::read_forms(source);
-  return termis::analyze_forms(forms);
+verona::Program analyze(std::string_view source) {
+  auto forms = verona::read_forms(source);
+  return verona::analyze_forms(forms);
 }
 
 void recognizes_core_forms() {
@@ -56,44 +56,44 @@ void recognizes_core_forms() {
   )");
 
   require(program.forms.size() == 16, "expected sixteen semantic forms");
-  require(program.forms[0]->kind == termis::SemanticKind::type_declaration,
+  require(program.forms[0]->kind == verona::SemanticKind::type_declaration,
           "expected type declaration");
-  require(program.forms[1]->kind == termis::SemanticKind::provide_declaration,
+  require(program.forms[1]->kind == verona::SemanticKind::provide_declaration,
           "expected provide declaration");
-  require(program.forms[2]->kind == termis::SemanticKind::function_declaration,
+  require(program.forms[2]->kind == verona::SemanticKind::function_declaration,
           "expected function declaration");
-  require(program.forms[3]->kind == termis::SemanticKind::extern_function_declaration,
+  require(program.forms[3]->kind == verona::SemanticKind::extern_function_declaration,
           "expected extern function declaration");
-  require(program.forms[4]->kind == termis::SemanticKind::let_expression,
+  require(program.forms[4]->kind == verona::SemanticKind::let_expression,
           "expected let expression");
-  require(program.forms[5]->kind == termis::SemanticKind::do_expression,
+  require(program.forms[5]->kind == verona::SemanticKind::do_expression,
           "expected do expression");
-  require(program.forms[6]->kind == termis::SemanticKind::match_expression,
+  require(program.forms[6]->kind == verona::SemanticKind::match_expression,
           "expected match expression");
-  require(program.forms[7]->kind == termis::SemanticKind::const_declaration,
+  require(program.forms[7]->kind == verona::SemanticKind::const_declaration,
           "expected const declaration");
-  require(program.forms[8]->kind == termis::SemanticKind::class_declaration,
+  require(program.forms[8]->kind == verona::SemanticKind::class_declaration,
           "expected class declaration");
-  require(program.forms[9]->kind == termis::SemanticKind::implements_declaration,
+  require(program.forms[9]->kind == verona::SemanticKind::implements_declaration,
           "expected implements declaration");
-  require(program.forms[10]->kind == termis::SemanticKind::application,
+  require(program.forms[10]->kind == verona::SemanticKind::application,
           "expected application");
-  require(program.forms[11]->kind == termis::SemanticKind::application,
+  require(program.forms[11]->kind == verona::SemanticKind::application,
           "expected call to be an application");
-  require(program.forms[12]->kind == termis::SemanticKind::list_expression,
+  require(program.forms[12]->kind == verona::SemanticKind::list_expression,
           "expected empty list expression");
-  require(program.forms[13]->kind == termis::SemanticKind::list_expression,
+  require(program.forms[13]->kind == verona::SemanticKind::list_expression,
           "expected list-headed list expression");
-  require(program.forms[14]->kind == termis::SemanticKind::list_expression,
+  require(program.forms[14]->kind == verona::SemanticKind::list_expression,
           "expected non-symbol-headed list expression");
-  require(program.forms[15]->kind == termis::SemanticKind::atom,
+  require(program.forms[15]->kind == verona::SemanticKind::atom,
           "expected atom");
 }
 
 void rejects_bad_type_declaration() {
   try {
     (void)analyze("(type 42 u64)");
-  } catch (const termis::SemanticError& error) {
+  } catch (const verona::SemanticError& error) {
     require(error.diagnostic().message == "type declaration name must be a symbol",
             "expected type name diagnostic");
     return;
@@ -105,7 +105,7 @@ void rejects_bad_type_declaration() {
 void rejects_bad_type_body() {
   try {
     (void)analyze("(type Buffer (array u8))");
-  } catch (const termis::TypeError& error) {
+  } catch (const verona::TypeError& error) {
     require(error.diagnostic().message == "array type requires an element type and compile-time size",
             "expected type body diagnostic");
     return;
@@ -118,7 +118,7 @@ void accepts_empty_lists() {
   auto program = analyze("()");
 
   require(program.forms.size() == 1, "expected one semantic form");
-  require(program.forms[0]->kind == termis::SemanticKind::list_expression,
+  require(program.forms[0]->kind == verona::SemanticKind::list_expression,
           "expected empty list to remain a list expression");
 }
 
@@ -132,7 +132,7 @@ void collects_type_declarations() {
 
   const auto* user_id = program.types.find("UserId");
   require(user_id != nullptr, "expected UserId declaration");
-  require(user_id->body->primitive == termis::PrimitiveType::u64, "expected UserId body");
+  require(user_id->body->primitive == verona::PrimitiveType::u64, "expected UserId body");
 
   const auto* pair = program.types.find("Pair");
   require(pair != nullptr, "expected Pair declaration");
@@ -166,7 +166,7 @@ void collects_provide_declarations() {
   require(math->functions[0].requirements[0].class_name == "Integer", "expected Integer requirement");
   require(math->functions[0].documentation == "Add two integers.",
           "expected function documentation");
-  require(math->functions[1].result->primitive == termis::PrimitiveType::bool_,
+  require(math->functions[1].result->primitive == verona::PrimitiveType::bool_,
           "expected equality to return bool");
 }
 
@@ -217,7 +217,7 @@ void rejects_unknown_implements_class() {
          (requires ()))
         (= left right)))
     )");
-  } catch (const termis::SemanticError& error) {
+  } catch (const verona::SemanticError& error) {
     require(error.diagnostic().message == "implements references unknown class",
             "expected unknown class diagnostic");
     return;
@@ -241,7 +241,7 @@ void rejects_missing_implements_methods() {
          (requires ()))
         true))
     )");
-  } catch (const termis::SemanticError& error) {
+  } catch (const verona::SemanticError& error) {
     require(error.diagnostic().message == "implements is missing class method",
             "expected missing method diagnostic");
     return;
@@ -265,7 +265,7 @@ void rejects_mismatched_implements_method_signatures() {
          (requires ()))
         true))
     )");
-  } catch (const termis::SemanticError& error) {
+  } catch (const verona::SemanticError& error) {
     require(error.diagnostic().message == "implements method signature does not match class method",
             "expected mismatched method diagnostic");
     return;
@@ -277,7 +277,7 @@ void rejects_mismatched_implements_method_signatures() {
 void rejects_unknown_type_references() {
   try {
     (void)analyze("(type MissingBox Missing)");
-  } catch (const termis::TypeError& error) {
+  } catch (const verona::TypeError& error) {
     require(error.diagnostic().message == "unknown type name",
             "expected unknown type diagnostic");
     return;
@@ -292,7 +292,7 @@ void rejects_missing_generic_arguments() {
       (type Box (T) (product (value T)))
       (type Bad Box)
     )");
-  } catch (const termis::TypeError& error) {
+  } catch (const verona::TypeError& error) {
     require(error.diagnostic().message == "generic type requires type arguments",
             "expected missing generic arguments diagnostic");
     return;
@@ -307,7 +307,7 @@ void rejects_bad_generic_argument_count() {
       (type Box (T) (product (value T)))
       (type Bad (Box i32 bool))
     )");
-  } catch (const termis::TypeError& error) {
+  } catch (const verona::TypeError& error) {
     require(error.diagnostic().message == "generic type argument count mismatch",
             "expected generic arity diagnostic");
     return;
@@ -322,7 +322,7 @@ void rejects_applying_concrete_types() {
       (type UserId u64)
       (type Bad (UserId i32))
     )");
-  } catch (const termis::TypeError& error) {
+  } catch (const verona::TypeError& error) {
     require(error.diagnostic().message == "type does not accept type arguments",
             "expected concrete type application diagnostic");
     return;

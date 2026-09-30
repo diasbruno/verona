@@ -1,7 +1,7 @@
-(in-package #:termis.compiler)
+(in-package #:verona.compiler)
 
-;;; The driver owns orchestration only.  Frontend analysis remains in TERMIS,
-;;; LLVM lowering remains in TERMIS.BACKEND.LLVM, and native commands live in
+;;; The driver owns orchestration only.  Frontend analysis remains in VERONA,
+;;; LLVM lowering remains in VERONA.BACKEND.LLVM, and native commands live in
 ;;; the Toolchain protocol below.
 
 (define-condition compiler-driver-error (error)
@@ -53,8 +53,8 @@ neither value is taken from the Common Lisp host."
     (unless platform
       (error 'unsupported-target :message (format nil "unsupported target ~A" triple)))
     (handler-case
-        (let* ((backend (termis.backend.llvm:make-llvm-backend
-                         :module-name "termis.target-probe"
+        (let* ((backend (verona.backend.llvm:make-llvm-backend
+                         :module-name "verona.target-probe"
                          :target-configuration
                          (make-target-configuration :triple triple :cpu cpu :features features)))
                (width (llvm-backend-pointer-width backend)))
@@ -98,8 +98,8 @@ neither value is taken from the Common Lisp host."
   ((compiler :initarg :compiler :reader native-toolchain-compiler)
    (archiver :initarg :archiver :reader native-toolchain-archiver)))
 
-(defun make-native-toolchain (&key (compiler (or (uiop:getenv "TERMIS_LINKER") "clang"))
-                                   (archiver (or (uiop:getenv "TERMIS_AR") "ar")))
+(defun make-native-toolchain (&key (compiler (or (uiop:getenv "VERONA_LINKER") "clang"))
+                                   (archiver (or (uiop:getenv "VERONA_AR") "ar")))
   (make-instance 'native-toolchain :compiler compiler :archiver archiver))
 
 (defun run-tool (failure-class tool arguments)
@@ -188,7 +188,7 @@ neither value is taken from the Common Lisp host."
      directory)))
 
 (defun temporary-object-path ()
-  (merge-pathnames (format nil "termis-~A.o" (gensym "OBJECT-"))
+  (merge-pathnames (format nil "verona-~A.o" (gensym "OBJECT-"))
                    (uiop:temporary-directory)))
 
 (defun driver-target-configuration (target &optional relocation-model)
@@ -209,7 +209,7 @@ in-memory LLVM module, verification, object emission, and toolchain handoff."
   (let* ((target (compiler-driver-target driver))
          (output (pathname (or output (default-output-path root artifact-kind target))))
          (frontend (make-compiler :search-paths (compiler-driver-search-paths driver)))
-         (unit (termis:compile-file frontend root :target target
+         (unit (verona:compile-file frontend root :target target
                                      :pointer-width (compilation-target-pointer-width target)))
          (program (compilation-unit-semantic-program unit))
          (picp (eq artifact-kind :shared-library))
@@ -225,7 +225,7 @@ in-memory LLVM module, verification, object emission, and toolchain handoff."
       (handler-case (add-platform-entry-wrapper backend program)
         (error (condition)
           (error 'invalid-entry-point :message (princ-to-string condition)))))
-    (hide-termis-symbols backend program)
+    (hide-verona-symbols backend program)
     (handler-case (verify-llvm-module backend)
       (error (condition)
         (error 'llvm-verification-failure :message (princ-to-string condition))))

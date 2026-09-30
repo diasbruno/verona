@@ -16,9 +16,9 @@ void require(bool condition, std::string_view message) {
 }
 
 std::string emit(std::string_view source) {
-  auto forms = termis::read_forms(source);
-  auto program = termis::analyze_forms(forms);
-  return termis::emit_llvm_ir(program);
+  auto forms = verona::read_forms(source);
+  auto program = verona::analyze_forms(forms);
+  return verona::emit_llvm_ir(program);
 }
 
 void contains(std::string_view haystack, std::string_view needle) {
@@ -140,7 +140,7 @@ void rejects_data_literal_for_non_data_pointer_alias() {
       (extern fn close ((file File)) i32 "fclose")
       (fn main () i32 (close "hello"))
     )");
-  } catch (const termis::CodegenError& error) {
+  } catch (const verona::CodegenError& error) {
     require(error.diagnostic().message == "expression type mismatch",
             "expected pointer alias mismatch diagnostic");
     return;
@@ -279,7 +279,7 @@ void emits_union_construction_and_field_access() {
 void rejects_type_mismatch() {
   try {
     (void)emit("(fn bad () i64 true)");
-  } catch (const termis::CodegenError& error) {
+  } catch (const verona::CodegenError& error) {
     require(error.diagnostic().message == "expression type mismatch",
             "expected type mismatch diagnostic");
     return;

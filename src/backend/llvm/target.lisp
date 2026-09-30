@@ -1,8 +1,8 @@
-(in-package #:termis.backend.llvm)
+(in-package #:verona.backend.llvm)
 
 ;;; CL-LLVM currently wraps target data but not LLVM's target-machine C API.
 ;;; Keep the small missing portion here, beside the backend, rather than
-;;; allowing machine details into the Termis semantic layers.
+;;; allowing machine details into the Verona semantic layers.
 
 (define-condition llvm-backend-error (error)
   ((message :initarg :message :reader llvm-backend-error-message))
@@ -74,7 +74,7 @@
                                         (cpu "generic") (features "")
                                         (relocation-model :default)
                                         (code-model :default))
-  "Describe the machine LLVM should target; it is never inferred from Termis."
+  "Describe the machine LLVM should target; it is never inferred from Verona."
   (make-instance 'target-configuration :triple triple :cpu cpu :features features
                  :relocation-model relocation-model :code-model code-model))
 

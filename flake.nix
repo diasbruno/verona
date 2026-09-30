@@ -1,5 +1,5 @@
 {
-  description = "Termis compiler development environment";
+  description = "Verona compiler development environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -55,13 +55,14 @@
               ];
 
               shellHook = ''
-                export TERMIS_CL_LLVM="${clLLVM}"
+                export VERONA_CL_LLVM="${clLLVM}"
                 # The compiler driver supplies the platform startup objects
-                # and defaults needed to turn a Termis object into a process.
-                export TERMIS_LINKER="${pkgs.llvmPackages_23.clang}/bin/clang"
+                # and defaults needed to turn a Verona object into a process.
+                export VERONA_LINKER="${pkgs.llvmPackages_23.clang}/bin/clang"
+                export VERONA_AR="${pkgs.llvmPackages_23.llvm}/bin/llvm-ar"
                 export LD_LIBRARY_PATH="${pkgs.llvmPackages_23.llvm.lib}/lib:''${LD_LIBRARY_PATH:-}"
                 export DYLD_LIBRARY_PATH="${pkgs.llvmPackages_23.llvm.lib}/lib:''${DYLD_LIBRARY_PATH:-}"
-                echo "Termis development shell: SBCL $(sbcl --version)"
+                echo "Verona development shell: SBCL $(sbcl --version)"
                 echo "LLVM $(llvm-config --version), CL-LLVM cea0ba4"
               '';
             };

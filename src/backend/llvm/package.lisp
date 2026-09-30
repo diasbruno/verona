@@ -1,4 +1,4 @@
-(defpackage #:termis.backend.llvm
+(defpackage #:verona.backend.llvm
   (:use #:cl)
   (:export
    #:llvm-backend
@@ -42,7 +42,7 @@
    #:emit-value
    #:emit-place
    #:generate-llvm
-   #:hide-termis-symbols
+   #:hide-verona-symbols
    #:verify-llvm-module
    #:print-llvm-module
    #:llvm-backend-error
@@ -56,4 +56,4 @@
    #:linker-error-stdout
    #:linker-error-stderr))
 
-(in-package #:termis.backend.llvm)
+(in-package #:verona.backend.llvm)

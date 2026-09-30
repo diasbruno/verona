@@ -1,18 +1,18 @@
-(in-package #:termis/tests)
+(in-package #:verona/tests)
 
-(in-suite :termis)
+(in-suite :verona)
 
 (defparameter +current-example-files+
-  '("01-arithmetic.termis"
-    "02-let-bindings.termis"
-    "03-match.termis"
-    "04-products.termis"
-    "05-sum-types.termis"
-    "06-generics.termis"))
+  '("01-arithmetic.vrn"
+    "02-let-bindings.vrn"
+    "03-match.vrn"
+    "04-products.vrn"
+    "05-sum-types.vrn"
+    "06-generics.vrn"))
 
 (defun current-example-pathname (name)
   (merge-pathnames (format nil "examples/~A" name)
-                   (asdf:system-source-directory :termis)))
+                   (asdf:system-source-directory :verona)))
 
 (test compiles-current-examples
   (dolist (name +current-example-files+)

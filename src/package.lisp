@@ -1,4 +1,4 @@
-(defpackage #:termis
+(defpackage #:verona
   (:use #:cl)
   (:shadow #:compile-file #:declaration #:import)
   (:export
@@ -20,11 +20,11 @@
    #:syntax-start
    #:syntax-end
    #:syntax-with-datum
-   #:termis-name
-   #:make-termis-name
-   #:termis-name-p
-   #:termis-name-value
-   #:termis-name=
+   #:verona-name
+   #:make-verona-name
+   #:verona-name-p
+   #:verona-name-value
+   #:verona-name=
    #:module-name
    #:make-module-name
    #:module-name-p
@@ -37,25 +37,25 @@
    #:qualified-name-qualifier
    #:qualified-name-name
    #:qualified-name-string
-   #:termis-symbol
-   #:termis-symbol-name
+   #:verona-symbol
+   #:verona-symbol-name
    #:unit-literal
    #:unit-literal-p
-   #:termis-boolean-literal
-   #:termis-boolean-literal-p
-   #:termis-boolean-literal-value
-   #:termis-list
-   #:make-termis-list
-   #:termis-list-p
-   #:termis-list-elements
-   #:termis-callable
-   #:termis-callable-p
-   #:termis-function
-   #:make-termis-function
-   #:termis-function-p
-   #:termis-macro
-   #:make-termis-macro
-   #:termis-macro-p
+   #:verona-boolean-literal
+   #:verona-boolean-literal-p
+   #:verona-boolean-literal-value
+   #:verona-list
+   #:make-verona-list
+   #:verona-list-p
+   #:verona-list-elements
+   #:verona-callable
+   #:verona-callable-p
+   #:verona-function
+   #:make-verona-function
+   #:verona-function-p
+   #:verona-macro
+   #:make-verona-macro
+   #:verona-macro-p
    #:environment
    #:make-environment
    #:environment-parent
@@ -327,7 +327,7 @@
    #:semantic-unit-type-syntax
    #:semantic-pointer-type-syntax
    #:semantic-pointer-type-syntax-target
-   #:termis-type
+   #:verona-type
    #:unit-type
    #:void-type
    #:never-type
@@ -447,7 +447,7 @@
    #:backend-validation-error
    #:validate-for-backend
    #:backend-representable-type-p
-   #:termis-type-name
+   #:verona-type-name
    #:build-semantic-expression
    #:resolve-compilation-unit
    #:resolve-program
@@ -488,6 +488,6 @@
    #:unknown-module-member
    #:private-declaration-access
    #:source-error
-   #:termis-read-error
-   #:termis-read-error-source
-   #:termis-read-error-location))
+   #:verona-read-error
+   #:verona-read-error-source
+   #:verona-read-error-location))

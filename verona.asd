@@ -1,5 +1,5 @@
-(asdf:defsystem #:termis
-  :description "The Termis compiler front-end foundation"
+(asdf:defsystem #:verona
+  :description "The Verona compiler front-end foundation"
   :serial t
   :components ((:file "src/package")
                (:file "src/source")
@@ -10,9 +10,9 @@
                (:file "src/compiler")
                (:file "src/resolver")))
 
-(asdf:defsystem #:termis/backend/llvm
-  :description "LLVM lowering for LLVM-ready Termis semantic programs"
-  :depends-on (#:termis #:llvm)
+(asdf:defsystem #:verona/backend/llvm
+  :description "LLVM lowering for LLVM-ready Verona semantic programs"
+  :depends-on (#:verona #:llvm)
   :serial t
   :components ((:file "src/backend/llvm/package")
                (:file "src/backend/llvm/target")
@@ -24,32 +24,32 @@
                (:file "src/backend/llvm/module")
                (:file "src/backend/llvm/codegen")))
 
-(asdf:defsystem #:termis/compiler
-  :description "Termis compiler driver and native artifact toolchain"
-  :depends-on (#:termis/backend/llvm)
+(asdf:defsystem #:verona/compiler
+  :description "Verona compiler driver and native artifact toolchain"
+  :depends-on (#:verona/backend/llvm)
   :serial t
   :components ((:file "src/driver/package")
                (:file "src/driver/driver")
                (:file "src/driver/build")
                (:file "src/driver/cli")))
 
-(asdf:defsystem #:termis/tests
-  :depends-on (#:termis #:fiveam)
+(asdf:defsystem #:verona/tests
+  :depends-on (#:verona #:fiveam)
   :serial t
   :components ((:file "tests/foundation")
                (:file "tests/examples")
                (:file "tests/modules")))
 
-(asdf:defsystem #:termis/llvm-tests
-  :description "FiveAM integration tests for the Termis LLVM backend"
-  :depends-on (#:termis/tests #:termis/backend/llvm)
+(asdf:defsystem #:verona/llvm-tests
+  :description "FiveAM integration tests for the Verona LLVM backend"
+  :depends-on (#:verona/tests #:verona/backend/llvm)
   :serial t
   :components ((:file "tests/llvm-backend")
                (:file "tests/examples-llvm")))
 
-(asdf:defsystem #:termis/compiler-tests
-  :description "FiveAM tests for the Termis compiler driver"
-  :depends-on (#:termis/llvm-tests #:termis/compiler)
+(asdf:defsystem #:verona/compiler-tests
+  :description "FiveAM tests for the Verona compiler driver"
+  :depends-on (#:verona/llvm-tests #:verona/compiler)
   :serial t
   :components ((:file "tests/compiler-driver")
                (:file "tests/build")))

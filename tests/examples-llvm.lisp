@@ -1,6 +1,6 @@
-(in-package #:termis/tests)
+(in-package #:verona/tests)
 
-(in-suite :termis)
+(in-suite :verona)
 
 (test executes-current-examples
   (dolist (name +current-example-files+)
