@@ -1,4 +1,4 @@
 (function main () exit-code
-  (let ((first exit-code 20)
-        (second exit-code (+ first 22)))
+  (let ((first i32 20)
+        (second i32 (+ first 22)))
     second))

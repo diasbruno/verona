@@ -1,12 +1,12 @@
 (generic combine (left right))
 
-(implementation combine ((left exit-code) (right exit-code)) exit-code
+(implementation combine ((left i32) (right i32)) i32
   (+ left right))
 
-(function twenty () exit-code
+(function twenty () i32
   20)
 
-(function twenty-two () exit-code
+(function twenty-two () i32
   22)
 
 (function main () exit-code

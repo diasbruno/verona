@@ -1,84 +1,117 @@
 # Verona
 
-Verona is a statically typed systems language with S-expression syntax. The
-compiler reads source into source-aware syntax, sequentially performs
-top-level macro expansion, collects declarations, resolves semantic types,
-and lowers LLVM-ready concrete calls. It supports compile-time generic
-dispatch with exact parameter-type matching.
+![Verona logo](assets/calico.png)
 
-```text
-Verona source → Source → Reader → Syntax → Top-level expansion → Declarations → Compilation unit
-```
+Verona is a statically typed systems programming language with an S-expression
+syntax. It compiles ahead of time through LLVM and supports product and sum
+types, pattern matching, generic dispatch, protocols, compile-time macros, and
+native-library output.
 
-## Front-end API
+## About
 
-For the complete source-language, Common Lisp, LLVM, compiler-driver, and
-declarative-build function reference, see [the API reference](docs/API.md).
+The language is designed to keep programs structurally simple without giving
+up explicit types or native performance. Its source forms are readable as data,
+which makes macros a natural part of the language, while the compiler carries
+source locations through analysis for useful diagnostics.
+
+Verona currently targets Darwin and Linux hosts supported by its LLVM and
+native-toolchain setup. The standalone `verona` command can compile an
+executable, object file, static library, or shared library.
+
+## Example: most of the language in one program
+
+This small program uses a product type, a sum type, construction and field
+access, pattern matching, local bindings, a generic with an implementation,
+and a protocol constraint:
 
 ```lisp
-(defparameter *compiler* (verona:make-compiler))
+(type point ((x i32) (y i32)))
 
-(defparameter *unit*
-  (verona:compile-string
-   *compiler*
-   "(type Point
-      (x f32)
-      (y f32))
+(type option (sum (none) (some i32)))
 
-    (function origin () Point unit)"))
+(generic add (left right))
 
-(verona:unit-declarations *unit*)
+(implementation add ((left i32) (right i32)) i32
+  (+ left right))
+
+(protocol measurement (a)
+  (measure ((value a)) i32))
+
+(implementation (measurement i32)
+  (function measure ((value i32)) i32
+    value))
+
+(function report
+  (for (a)
+    ((measurement a)))
+  ((value a))
+  i32
+  (measure value))
+
+(function unwrap ((value option)) i32
+  (match value
+    ((none) 0)
+    ((some number) number)))
+
+(function main () exit-code
+  (let ((origin point (point 40 2))
+        (value option (some (add (field origin x) (field origin y)))))
+    (report (unwrap value))))
 ```
 
-`compile-file` accepts a pathname and follows the same pipeline. Every
-declaration exposes its original source form and its expanded syntax; the unit
-retains ordered declarations, a single declaration namespace, and the
-compile-time environment. Duplicate definitions report both source locations.
+The program returns `42`. For smaller runnable examples, including arithmetic,
+bindings, matching, products, sums, generics, and protocols, see
+[`examples/`](examples/) and [its guide](examples/README.md).
 
-The reader recognizes symbols, signed integers, decimal f64 literals,
-double-quoted data literals, lists, and `unit` as Verona's sole unit notation:
-it denotes `UnitType` in type position and its only value in value position.
-The public
-definition forms (`type`, `function`, `macro`, `constant`, `variable`,
-`generic`, and `implementation`) are
-top-level macros that expand into compiler definition forms. Discovery is
-ordered so macros can affect later source forms, while body analysis is deferred
-until all declarations are known.
+## Architecture
 
-## Development
+The compiler is organized as a reusable front end, an LLVM backend, and a
+thin native driver:
 
-Enter the Nix shell, then run:
+```text
+Verona source
+  → source-aware reader and syntax
+  → top-level macro expansion and declaration collection
+  → semantic type resolution and specialization
+  → LLVM IR generation and verification
+  → object emission and the host linker or archiver
+```
+
+The front end keeps source forms and expanded syntax attached to declarations.
+It processes top-level forms in order, so a macro can affect later forms, then
+resolves the complete declaration set before lowering. The LLVM backend turns
+the resolved program into target-specific IR. Finally, the compiler driver
+selects a target, emits an object, and asks the host toolchain to create the
+requested native artifact.
+
+The `verona` executable is deliberately a small wrapper around the reusable
+`verona.compiler:compiler-driver` API. This keeps source analysis independent
+of linking policy and makes the front end suitable for embedding.
+
+## Getting started
+
+Enter the Nix development shell, then run the test suite:
 
 ```sh
 make test
 ```
 
-## Standalone executable
-
-Build a self-contained `verona` command with SBCL's runtime bundled into the
-image:
+Build the self-contained command-line executable with SBCL's runtime bundled
+into the image:
 
 ```sh
 make build
 ```
 
 This creates `build/verona`. The build must run from the Verona development
-shell because it needs the configured LLVM bindings. The resulting executable
-can then be installed on the system path, for example:
+shell because it uses the configured LLVM bindings. You can then install it,
+for example:
 
 ```sh
 install -m 755 build/verona /usr/local/bin/verona
 ```
 
-The executable is native to the platform and architecture where it was built.
-
-## Native compiler
-
-The `verona` command is a thin layer over the reusable
-`verona.compiler:compiler-driver` API. `make build` produces the standalone
-command described above. It resolves an explicit native target before frontend
-analysis, verifies the in-memory LLVM module, emits an object, and delegates
-final linking or archiving to the host toolchain.
+Compile a program or produce a library with:
 
 ```sh
 verona compile src/app.vrn -o app
@@ -89,18 +122,18 @@ verona compile src/lib.vrn --emit shared-library -o libverona.dylib
 Executables require `(function main () unit ...)`; the generated platform
 wrapper returns status zero. Object files, static libraries, and shared
 libraries do not require `main`. `-L`, `-l`, and `--framework` pass native
-linker inputs through the driver (frameworks are Darwin-only).
+linker inputs through the driver; frameworks are Darwin-only.
 
-Verona-module visibility remains independent of native visibility. A function
-is exposed to C only with an explicit top-level declaration:
+Verona-module visibility is separate from native visibility. Expose a function
+to C with an explicit top-level declaration:
 
 ```lisp
 (function add ((a i32) (b i32)) i32 (+ a b))
-(native-export add)             ; optional second argument: "c_symbol_name"
+(native-export add) ; optional second argument: "c_symbol_name"
 ```
 
-Native exports currently accept the scalar and pointer types already supported
-by `external-function`; products, sums, and `unit` remain outside the C ABI.
+Native exports currently accept the scalar and pointer types supported by
+`external-function`; products, sums, and `unit` are outside the C ABI.
 
 ## Declarative builds
 
@@ -124,27 +157,24 @@ options. Build files may also declare target triples, native library paths,
 and Darwin frameworks. Relative module and library paths are resolved from the
 directory containing `verona.build`.
 
-The active tests use FiveAM. The pre-foundation C++ test sources remain in the
-repository as historical input material. The Verona programs in
-[`examples/`](examples/) use the current front-end syntax and are compiled by
-the active test suite.
+For the complete source-language, Common Lisp, LLVM, compiler-driver, and
+declarative-build reference, see [the API documentation](docs/API.md).
 
-## Examples
+## License
 
-[`examples/`](examples/) contains small, self-contained programs covering the
-features implemented today. See [the examples guide](examples/README.md) for
-the feature covered by each program. Modules, imports, the standard library,
-and C FFI are not yet part of this set because they are not currently supported
-by the front end.
+Verona is released under the [Unlicense](license): it is free and
+unencumbered software dedicated to the public domain, to the extent permitted
+by law. See [`license`](license) for the complete dedication and warranty
+disclaimer.
+
+## Why “Verona”?
+
+The name is inspired by Verona, the city in Italy—and by Verona, one of the
+author's cats.
 
 ## Roadmap
 
 ```text
-Step 15 — Product types
-Step 16 — Sum types + constructor patterns
-Step 17 — Repetition: loop / recur
-Step 18 — Generics: generic / implementation
-Step 19 — Compile-time macros in Verona
 Step 20 — Arrays + memory operations
 Step 21 — C FFI / ABI
 Step 22 — Modules / namespaces

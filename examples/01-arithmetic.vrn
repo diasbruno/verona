@@ -1,4 +1,4 @@
-(function add ((left exit-code) (right exit-code)) exit-code
+(function add ((left i32) (right i32)) i32
   (+ left right))
 
 (function main () exit-code

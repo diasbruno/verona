@@ -12,7 +12,7 @@ implemented by the current compiler. Every program defines `main` and returns
 | `04-products.vrn` | Product types, construction, and field access |
 | `05-sum-types.vrn` | Sum types, constructors, and constructor patterns |
 | `06-generics.vrn` | Generic dispatch and a concrete implementation |
-| `07-polymorphism-protocols.vrn` | Parametric specialization, protocol constraints, and `exit-code` |
+| `07-polymorphism-protocols.vrn` | Parametric specialization and protocol constraints |
 
 `make test` compiles every file, and `make test-llvm` executes every file, so
 these examples are kept in step with the supported front end and backend.

@@ -1,6 +1,6 @@
-(type option (sum (none) (some exit-code)))
+(type option (sum (none) (some i32)))
 
-(function unwrap ((value option)) exit-code
+(function unwrap ((value option)) i32
   (match value
     ((none) 0)
     ((some number) number)))

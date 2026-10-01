@@ -1,4 +1,4 @@
-(function maximum ((left exit-code) (right exit-code)) exit-code
+(function maximum ((left i32) (right i32)) i32
   (match (> left right)
     (true left)
     (false right)))

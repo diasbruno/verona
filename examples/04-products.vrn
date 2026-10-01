@@ -1,6 +1,6 @@
-(type point ((x exit-code) (y exit-code)))
+(type point ((x i32) (y i32)))
 
-(function make-point ((x exit-code) (y exit-code)) point
+(function make-point ((x i32) (y i32)) point
   (point x y))
 
 (function main () exit-code

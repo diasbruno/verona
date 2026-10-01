@@ -1,20 +1,20 @@
 (protocol display (a)
-  (display ((value a)) exit-code))
+  (display ((value a)) i32))
 
-(implementation (display exit-code)
+(implementation (display i32)
   (function display
-    ((value exit-code))
-    exit-code
+    ((value i32))
+    i32
     value))
 
 (function print
   (for (a)
     ((display a)))
   ((value a))
-  exit-code
+  i32
   (display value))
 
-(function answer () exit-code
+(function answer () i32
   42)
 
 (function main () exit-code
