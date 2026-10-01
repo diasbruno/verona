@@ -12,8 +12,12 @@ implemented by the current compiler. Every program defines `main` and returns
 | `04-products.vrn` | Product types, construction, and field access |
 | `05-sum-types.vrn` | Sum types, constructors, and constructor patterns |
 | `06-generics.vrn` | Generic dispatch and a concrete implementation |
+| `07-polymorphism-protocols.vrn` | Parametric specialization, protocol constraints, and `exit-code` |
 
 `make test` compiles every file, and `make test-llvm` executes every file, so
 these examples are kept in step with the supported front end and backend.
 Modules, imports, standard-library bindings, and C FFI are intentionally not
 represented here because they are not yet available in the current compiler.
+
+Executable entry points return `exit-code`, Verona's alias for the platform
+C `int` type (currently `i32`).

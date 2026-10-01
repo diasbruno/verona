@@ -77,21 +77,17 @@
                   (source-name= (semantic-source-binding declaration) "main")))
            (semantic-declarations program)))
 
-(defun i64-type-p (type)
-  (and (typep type 'verona:integer-type)
-       (verona:integer-type-signed type)
-       (= 64 (verona:integer-type-width type))))
-
 (defun validate-executable-entry-point (program)
-  "Enforce the Verona executable contract: main : () -> unit."
+  "Enforce the Verona executable contract: main : () -> exit-code."
   (let ((entry (find-entry-function program)))
     (unless entry
       (entry-fail "executable requires a Verona function named main"))
     (unless (null (verona:semantic-function-declaration-parameters entry))
       (entry-fail "Verona main must not have parameters"))
-    (unless (typep (verona:semantic-function-declaration-return-type entry)
-                   'verona:unit-type)
-      (entry-fail "Verona main must return unit"))
+    (unless (eq (verona:semantic-function-declaration-return-type entry)
+                (verona:type-context-c-int-type
+                 (verona:semantic-program-type-context program)))
+      (entry-fail "Verona main must return exit-code (the C int type)"))
     entry))
 
 (defun add-platform-entry-wrapper (backend program)
@@ -104,36 +100,17 @@
                          (llvm:function-type (llvm:int32-type :context context) '())))
          (block (llvm:append-basic-block platform-main "entry" :context context)))
     (llvm:position-builder-at-end (llvm-backend-builder backend) block)
-    ;; Verona Unit has a target-sized internal representation, but it is not
-    ;; an exit status.  The platform ABI boundary deliberately ignores it.
-    (llvm:build-call (llvm-backend-builder backend) verona-main '() "verona.main")
     (llvm:build-ret (llvm-backend-builder backend)
-                    (llvm:const-int (llvm:int32-type :context context) 0))
+                    (llvm:build-call (llvm-backend-builder backend)
+                                     verona-main '() "verona.exit"))
     platform-main))
 
 (defun add-legacy-platform-entry-wrapper (backend program)
   "Compatibility wrapper for the pre-driver backend API.
 
-New compiler-driver callers must use ADD-PLATFORM-ENTRY-WRAPPER and therefore
-the `main : () -> unit` contract.  Keeping this private adapter avoids making
-the Step 23 API change gratuitously break the backend's older embedding API."
-  (let* ((entry (find-entry-function program))
-         (context (llvm-backend-context backend)))
-    (unless (and entry (null (verona:semantic-function-declaration-parameters entry))
-                 (i64-type-p (verona:semantic-function-declaration-return-type entry)))
-      (return-from add-legacy-platform-entry-wrapper
-        (add-platform-entry-wrapper backend program)))
-    (let* ((verona-main (backend-binding backend entry))
-           (platform-main (llvm:add-function
-                           (llvm-backend-module backend) "main"
-                           (llvm:function-type (llvm:int32-type :context context) '())))
-           (block (llvm:append-basic-block platform-main "entry" :context context)))
-      (llvm:position-builder-at-end (llvm-backend-builder backend) block)
-      (let ((result (llvm:build-call (llvm-backend-builder backend) verona-main '() "verona.exit")))
-        (llvm:build-ret (llvm-backend-builder backend)
-                        (llvm:build-trunc (llvm-backend-builder backend) result
-                                          (llvm:int32-type :context context) "exit.status")))
-      platform-main)))
+The historical embedding API now uses the same `exit-code` contract as the
+compiler driver."
+  (add-platform-entry-wrapper backend program))
 
 (defun emit-object (backend output)
   "Emit BACKEND's already-verified module as a native object file."

@@ -1,5 +1,5 @@
-(function add ((left i64) (right i64)) i64
+(function add ((left exit-code) (right exit-code)) exit-code
   (+ left right))
 
-(function main () i64
+(function main () exit-code
   (add 20 22))

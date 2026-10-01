@@ -42,7 +42,44 @@
            (implementation combine ((a i64) (b i64)) i64 (+ a b))
            (function twenty () i64 20)
            (function twenty-two () i64 22)
-           (function main () i64 (combine (twenty) (twenty-two)))"))
+           (function main () exit-code
+             (%trunc-primitive-i64-i32 (combine (twenty) (twenty-two))))"))
+    (is (= 42 (compile-and-run-native source)))))
+
+(test monomorphizes-parametric-functions-for-llvm
+  (let ((source
+          "(function identity
+             (for (a))
+             ((value a))
+             a
+             value)
+           (function source () i64 42)
+           (function main () exit-code
+             (%trunc-primitive-i64-i32 (identity (source))))"))
+    ;; The template has no LLVM symbol; its i64 specialization is a normal
+    ;; concrete function called by MAIN.
+    (is (= 42 (compile-and-run-native source)))))
+
+(test resolves-protocol-calls-before-llvm-lowering
+  (let ((source
+          "(protocol display (a)
+             (display ((value a)) i64))
+           (implementation (display i64)
+             (function display
+               ((value i64))
+               i64
+               value))
+           (function print
+             (for (a)
+               ((display a)))
+             ((value a))
+             i64
+             (display value))
+           (function source () i64 42)
+           (function main () exit-code
+             (%trunc-primitive-i64-i32 (print (source))))"))
+    ;; PRINT<i64> contains an ordinary call to this exact Display<i64>
+    ;; operation; neither protocol values nor dispatch tables reach LLVM.
     (is (= 42 (compile-and-run-native source)))))
 
 (test lowers-unit-to-the-target-pointer-width
@@ -82,18 +119,19 @@
         (delete-file object)))))
 
 (test executes-native-verona-programs
-  (is (= 0 (compile-and-run-native "(function main () i64 0)")))
-  (is (= 42 (compile-and-run-native "(function main () i64 42)")))
+  (is (= 0 (compile-and-run-native "(function main () exit-code 0)")))
+  (is (= 42 (compile-and-run-native "(function main () exit-code 42)")))
   (is (= 42 (compile-and-run-native
-             "(function main () i64 (%+-primitive-i64 20 22))")))
+             "(function main () exit-code (+ 20 22))")))
   (is (= 0 (compile-and-run-native
              (format nil "(function noop () unit unit)~%
-                          (function main () i64 (do (noop) (%+-primitive-i64 0 0)))")))))
+                          (function main () exit-code (do (noop) 0))")))))
 
 (test executes-explicit-conversions-natively
   (is (= 42 (compile-and-run-native
              (format nil "(function widen ((value i32)) i64 (%sext-primitive-i32-i64 value))~%
-                          (function main () i64 (widen 42))")))))
+                          (function main () exit-code
+                            (%trunc-primitive-i64-i32 (widen 42)))")))))
 
 (test lowers-let-bindings-as-ssa-values-and-executes-them
   (let* ((source (format nil
@@ -108,7 +146,9 @@
                             (match (%>-primitive-i64 a b)~%
                               (true (let ((x i64 (%+-primitive-i64 a 10))) x))~%
                               (false (let ((x i64 (%+-primitive-i64 b 10))) x))))~%
-                          (function main () i64 (max-plus-ten (sequential) (shadow)))"))
+                          (function main () exit-code
+                            (%trunc-primitive-i64-i32
+                              (max-plus-ten (sequential) (shadow))))"))
          (unit (compile-string (make-compiler) source))
          (backend (verona.backend.llvm:generate-llvm
                    (compilation-unit-semantic-program unit)))
@@ -126,9 +166,9 @@
              (type line ((start point) (end point)))
              (function make-point ((x i64) (y i64)) point (point x y))
              (function end-y ((value line)) i64 (field (field value end) y))
-             (function main () i64
+             (function main () exit-code
                (let ((value line (line (make-point 10 20) (make-point 30 42))))
-                 (end-y value)))")
+                 (%trunc-primitive-i64-i32 (end-y value))))")
 	 (unit (compile-string (make-compiler) source))
 	 (backend (verona.backend.llvm:generate-llvm
 		   (compilation-unit-semantic-program unit)))
@@ -141,8 +181,8 @@
   (let* ((source
            "(function pick ((values (array i64 4)) (i usize)) i64
                (index values i))
-             (function main () i64
-               (pick (array-of 10 20 30 40) 2))")
+             (function main () exit-code
+               (%trunc-primitive-i64-i32 (pick (array-of 10 20 30 40) 2)))")
          (unit (compile-string (make-compiler) source))
          (backend (verona.backend.llvm:generate-llvm
                    (compilation-unit-semantic-program unit)))
@@ -158,7 +198,8 @@
                             (match (%>-primitive-i64 a b)~%
                               (true a)~%
                               (false b)))~%
-                          (function main () i64 (max 20 42))"))
+                          (function main () exit-code
+                            (%trunc-primitive-i64-i32 (max 20 42)))"))
 	 (unit (compile-string (make-compiler) source))
 	 (backend (verona.backend.llvm:generate-llvm
 		   (compilation-unit-semantic-program unit)))
@@ -169,36 +210,40 @@
 
 (test executes-terminating-and-integer-match-cases
   (is (= 0 (compile-and-run-native
-	    "(function normalize ((x i64)) i64 (match (%<-primitive-i64 x 0) (true (return 0)) (false x))) (function main () i64 (normalize -10))")))
+	    "(function normalize ((x i64)) i64 (match (%<-primitive-i64 x 0) (true (return 0)) (false x))) (function main () exit-code (%trunc-primitive-i64-i32 (normalize -10)))")))
   (is (= 42 (compile-and-run-native
-	    "(function normalize ((x i64)) i64 (match (%<-primitive-i64 x 0) (true (return 0)) (false x))) (function main () i64 (normalize 42))")))
+	    "(function normalize ((x i64)) i64 (match (%<-primitive-i64 x 0) (true (return 0)) (false x))) (function main () exit-code (%trunc-primitive-i64-i32 (normalize 42)))")))
   (is (= 20 (compile-and-run-native
-	    "(function classify ((x i64)) i64 (match x (0 10) (1 20) (_ 30))) (function main () i64 (classify 1))"))))
+	    "(function classify ((x i64)) i64 (match x (0 10) (1 20) (_ 30))) (function main () exit-code (%trunc-primitive-i64-i32 (classify 1)))"))))
 
 (test validates-the-executable-entry-contract
-  (let ((unit (compile-string (make-compiler) "(function main () i32 0)")))
+  (let ((unit (compile-string (make-compiler) "(function main () unit unit)")))
     (signals verona.backend.llvm:entry-point-error
        (verona.backend.llvm:build-executable
-       (compilation-unit-semantic-program unit) (native-test-path "program")))))
+       (compilation-unit-semantic-program unit) (native-test-path "program"))))
+  (is (= 42 (compile-and-run-native "(function main () exit-code 42)"))))
 
 (test lowers-and-executes-sum-construction-and-constructor-patterns
   (is (= 42 (compile-and-run-native
              "(type option (sum (none) (some i64)))
               (function unwrap ((value option)) i64
                 (match value ((none) 0) ((some x) x)))
-              (function main () i64 (unwrap (some 42)))")))
+              (function main () exit-code
+                (%trunc-primitive-i64-i32 (unwrap (some 42))))")))
   (is (= 42 (compile-and-run-native
              "(type status (sum (success) (failure)))
               (function value ((state status)) i64
                 (match state ((success) 42) ((failure) 0)))
-              (function main () i64 (value (success)))")))
+              (function main () exit-code
+                (%trunc-primitive-i64-i32 (value (success))))")))
   (is (= 42 (compile-and-run-native
              "(type result (sum (ok i64 i64) (error i64)))
               (function value ((result result)) i64
                 (match result
                   ((ok x y) (%+-primitive-i64 x y))
                   ((error _) 0)))
-              (function main () i64 (value (ok 20 22)))")))
+              (function main () exit-code
+                (%trunc-primitive-i64-i32 (value (ok 20 22))))")))
   (is (= 42 (compile-and-run-native
              "(type pair (product (left i64) (right i64)))
               (type result (sum (ok pair) (error i64)))
@@ -206,15 +251,19 @@
                 (match result
                   ((ok pair) (%+-primitive-i64 (field pair left) (field pair right)))
                   ((error _) 0)))
-              (function main () i64 (unwrap (ok (pair 20 22))))")))
+              (function main () exit-code
+                (%trunc-primitive-i64-i32 (unwrap (ok (pair 20 22)))) )")))
   (is (= 10 (compile-and-run-native
              "(type option (sum (none) (some i64)))
               (function classify ((value option)) i64
                 (match value ((some 0) 10) ((some x) x) ((none) 0)))
-              (function main () i64 (classify (some 0)))")))
+              (function main () exit-code
+                (%trunc-primitive-i64-i32 (classify (some 0))))")))
   (is (= 42 (compile-and-run-native
              "(type option (sum (none) (some i64)))
               (type response (product (status i64) (value option)))
               (function unwrap ((value option)) i64
                 (match value ((none) 0) ((some x) x)))
-              (function main () i64 (unwrap (field (response 0 (some 42)) value)))"))))
+              (function main () exit-code
+                (%trunc-primitive-i64-i32
+                  (unwrap (field (response 0 (some 42)) value))))"))))

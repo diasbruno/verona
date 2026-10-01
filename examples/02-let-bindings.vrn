@@ -1,4 +1,4 @@
-(function main () i64
-  (let ((first i64 20)
-        (second i64 (%+-primitive-i64 first 22)))
+(function main () exit-code
+  (let ((first exit-code 20)
+        (second exit-code (+ first 22)))
     second))

@@ -1113,5 +1113,93 @@
       (is (typep (semantic-reference-binding (semantic-call-callee call))
                  'semantic-generic-implementation)))))
 
+(test resolves-parametric-function-type-parameter-identities
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(function identity
+                   (for (a))
+                   ((value a))
+                   a
+                   value)"))
+         (program (compilation-unit-semantic-program unit))
+         (function (semantic-program-declaration program (first (unit-declarations unit))))
+         (parameter (first (semantic-function-declaration-parameters function)))
+         (type-parameter (first (verona:semantic-function-declaration-type-parameters function))))
+    (is (typep type-parameter 'verona:type-parameter))
+    (is (eq type-parameter (parameter-binding-type parameter)))
+    (is (eq type-parameter (semantic-function-declaration-return-type function)))
+    (is (typep (semantic-function-declaration-body function) 'verona:load-expression))))
+
+(test infers-parametric-function-arguments-structurally
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(function first
+                   (for (a))
+                   ((values (array a 2)))
+                   a
+                   (index values 0))
+                 (function main ((values (array i64 2))) i64
+                   (first values))"))
+         (program (compilation-unit-semantic-program unit))
+         (main (semantic-program-declaration program (second (unit-declarations unit))))
+         (call (semantic-function-declaration-body main))
+         (specialization (first (verona:semantic-program-function-specializations program))))
+    (is (typep call 'verona:polymorphic-call))
+    (is (typep (semantic-expression-type call) 'integer-type))
+    (is (= 64 (integer-type-width (semantic-expression-type call))))
+    (is (typep specialization 'verona:semantic-function-specialization))
+    (is (null (verona:semantic-function-declaration-type-parameters specialization)))
+    (is (typep (semantic-function-declaration-body specialization) 'verona:load-expression))))
+
+(test resolves-protocols-and-for-constraints
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(protocol display (a)
+                   (display ((value a)) string))
+                 (function show
+                   (for (a) ((display a)))
+                   ((value a))
+                   a
+                   value)"))
+         (program (compilation-unit-semantic-program unit))
+         (protocol-declaration (first (unit-declarations unit)))
+         (protocol (semantic-program-declaration program protocol-declaration))
+         (function (semantic-program-declaration program (second (unit-declarations unit))))
+         (constraint (first (verona:semantic-function-declaration-constraints function))))
+    (is (typep protocol 'verona:semantic-protocol-declaration))
+    (is (= 1 (length (verona:protocol-operations
+                      (verona:semantic-protocol-declaration-protocol protocol)))))
+    (is (typep constraint 'verona:protocol-constraint))
+    (is (eq (verona:protocol-constraint-protocol constraint)
+            (verona:semantic-protocol-declaration-protocol protocol)))))
+
+(test solves-concrete-protocol-constraints-at-parametric-calls
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(protocol display (a)
+                   (display ((value a)) i32))
+                 (implementation (display i32)
+                   (function display ((value i32)) i32 value))
+                 (function print
+                   (for (a) ((display a)))
+                   ((value a))
+                   i32
+                   (display value))
+                 (function main () i32 (print 42))"))
+         (program (compilation-unit-semantic-program unit))
+         (main (semantic-program-declaration program (fourth (unit-declarations unit))))
+         (call (semantic-function-declaration-body main))
+         (specialization (verona:polymorphic-call-function call))
+         (specialized-body (semantic-function-declaration-body specialization)))
+    (is (typep call 'verona:polymorphic-call))
+    (is (typep (verona:polymorphic-call-function call)
+               'semantic-function-declaration))
+    ;; The template keeps protocol evidence, while Print<i32> has a direct
+    ;; call to the one concrete implementation selected at its call site.
+    (is (typep specialized-body 'semantic-call))
+    (is (typep (semantic-reference-binding
+                (semantic-call-callee specialized-body))
+               'verona:semantic-protocol-operation-implementation))))
+
 (defun run-tests ()
   (run! :verona))

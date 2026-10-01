@@ -243,6 +243,7 @@ does not inspect, evaluate, or otherwise interpret declaration contents."
                            ("constant" . "%constant")
                            ("variable" . "%variable")
                            ("generic" . "%generic")
+                           ("protocol" . "%protocol")
                            ("implementation" . "%implementation")))
       (environment-bind environment (make-verona-name (car definition))
                         (bootstrap-definition-macro (cdr definition))))

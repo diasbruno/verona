@@ -347,6 +347,8 @@ only job here is to form the CFG and merge non-terminating case values."
        (unless (and (typep callee 'verona:reference-expression)
                     (typep (verona:semantic-reference-binding callee)
                            '(or verona:function-declaration
+                                verona:semantic-function-specialization
+                                verona:semantic-protocol-operation-implementation
                                 verona:semantic-generic-implementation)))
          (backend-fail "ordinary call has no resolved concrete callable"))
        (llvm:build-call

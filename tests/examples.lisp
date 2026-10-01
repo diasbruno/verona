@@ -8,7 +8,8 @@
     "03-match.vrn"
     "04-products.vrn"
     "05-sum-types.vrn"
-    "06-generics.vrn"))
+    "06-generics.vrn"
+    "07-polymorphism-protocols.vrn"))
 
 (defun current-example-pathname (name)
   (merge-pathnames (format nil "examples/~A" name)

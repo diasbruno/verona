@@ -1,7 +1,21 @@
 (in-package #:verona.backend.llvm)
 
 (defun semantic-declarations (program)
-  (mapcar #'cdr (verona:semantic-program-declarations program)))
+  ;; Templates are intentionally absent from LLVM.  Their generated concrete
+  ;; instances are appended after ordinary source declarations so the usual
+  ;; declare-all pass still installs every recursive call target first.
+  (append
+   (remove-if (lambda (declaration)
+                (and (typep declaration 'verona:semantic-function-declaration)
+                     (verona:semantic-function-declaration-type-parameters declaration)))
+              (mapcar #'cdr (verona:semantic-program-declarations program)))
+   (mapcan (lambda (declaration)
+             (when (typep declaration 'verona:semantic-protocol-implementation)
+               (mapcar #'cdr
+                       (verona:protocol-implementation-operations
+                        (verona:semantic-protocol-implementation-implementation declaration)))))
+           (mapcar #'cdr (verona:semantic-program-declarations program)))
+   (verona:semantic-program-function-specializations program)))
 
 (defun declare-all (backend program)
   (dolist (declaration (semantic-declarations program))

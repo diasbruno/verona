@@ -40,6 +40,29 @@
 (defclass defined-type (verona-type)
   ((declaration :initarg :declaration :reader defined-type-declaration)))
 
+;; Type parameters are semantic identities.  They are intentionally types in
+;; their own right rather than source names, which keeps independently bound
+;; `a`s distinct and makes substitution structural instead of textual.
+(defclass type-parameter (verona-type semantic-binding)
+  ((declaration :initarg :declaration :reader type-parameter-declaration)
+   (index :initarg :index :reader type-parameter-index)
+   (source :initarg :source :reader type-parameter-source)))
+
+(defclass type-substitution ()
+  ((entries :initarg :entries :initform '() :accessor type-substitution-entries)))
+
+(defun make-type-substitution (&optional entries)
+  (make-instance 'type-substitution :entries entries))
+
+(defun type-substitution-find (substitution parameter)
+  (cdr (assoc parameter (type-substitution-entries substitution) :test #'eq)))
+
+(defun type-substitution-bind (substitution parameter type)
+  (let ((entry (assoc parameter (type-substitution-entries substitution) :test #'eq)))
+    (if entry (setf (cdr entry) type)
+        (push (cons parameter type) (type-substitution-entries substitution)))
+    type))
+
 ;; A product retains its declaration identity through DEFINED-TYPE while also
 ;; carrying the complete, ordered value layout needed by later stages.
 (defclass product-type (defined-type)
@@ -72,6 +95,10 @@
    (pointer-width :initarg :pointer-width :reader type-context-pointer-width)
    (boolean-type :reader type-context-boolean-type)
    (string-type :reader type-context-string-type)
+   ;; C's `int` is the platform process-exit representation.  It is distinct
+   ;; from pointer-sized ISIZE and remains a signed 32-bit integer on the
+   ;; targets Verona currently supports.
+   (c-int-type :reader type-context-c-int-type)
    (integer-types :initform '() :accessor type-context-integer-types)
    (float-types :initform '() :accessor type-context-float-types)
    (pointer-types :initform '() :accessor type-context-pointer-types)
@@ -99,6 +126,8 @@
 	(push (cons (cons signed width)
 		    (make-instance 'integer-type :signed signed :width width))
 	      (type-context-integer-types context))))
+    (setf (slot-value context 'c-int-type)
+          (type-context-integer-type context t 32))
     (dolist (width '(32 64))
       (push (cons width (make-instance 'float-type :width width))
 	    (type-context-float-types context)))
@@ -292,6 +321,46 @@ the semantic type of a unit expression remains UnitType."
   ((element-type :initarg :element-type :reader semantic-array-type-syntax-element-type)
    (length :initarg :length :reader semantic-array-type-syntax-length)))
 
+(defclass for-clause ()
+  ((syntax :initarg :syntax :reader for-clause-syntax)
+   (type-parameters :initarg :type-parameters :initform '()
+                    :reader for-clause-type-parameters)
+   (constraint-syntaxes :initarg :constraint-syntaxes :initform '()
+                        :reader for-clause-constraint-syntaxes)))
+
+(defclass protocol ()
+  ((declaration :initarg :declaration :reader protocol-declaration)
+   (name :initarg :name :reader protocol-name)
+   (type-parameters :initarg :type-parameters :initform '()
+                    :accessor protocol-type-parameters)
+   (operations :initarg :operations :initform '() :accessor protocol-operations)
+   (implementations :initform '() :accessor protocol-implementations)))
+
+(defclass protocol-binding (semantic-binding)
+  ((protocol :initarg :protocol :reader protocol-binding-protocol)))
+
+(defclass protocol-operation ()
+  ((protocol :initarg :protocol :reader protocol-operation-protocol)
+   (name :initarg :name :reader protocol-operation-name)
+   (parameters :initarg :parameters :reader protocol-operation-parameters)
+   (result-type :initarg :result-type :reader protocol-operation-result-type)
+   (source :initarg :source :reader protocol-operation-source)))
+
+(defclass protocol-constraint ()
+  ((protocol :initarg :protocol :reader protocol-constraint-protocol)
+   (arguments :initarg :arguments :reader protocol-constraint-arguments)
+   (source :initarg :source :reader protocol-constraint-source)))
+
+(defclass protocol-implementation ()
+  ((protocol :initarg :protocol :reader protocol-implementation-protocol)
+   (arguments :initarg :arguments :reader protocol-implementation-arguments)
+   (operations :initarg :operations :initform '()
+               :accessor protocol-implementation-operations)
+   (source :initarg :source :reader protocol-implementation-source)))
+
+(defun protocol-implementation-find-operation (implementation operation)
+  (cdr (assoc operation (protocol-implementation-operations implementation) :test #'eq)))
+
 (defclass parameter-binding (semantic-binding)
   ((syntax :initarg :syntax :reader parameter-binding-syntax)
    (type-syntax :initarg :type-syntax :reader parameter-binding-type-syntax)
@@ -324,7 +393,11 @@ the semantic type of a unit expression remains UnitType."
    (module-graph :initarg :module-graph :initform nil :reader program-module-graph)
    (target :initarg :target :initform nil :reader program-target)
    (native-exports :initform '() :accessor semantic-program-native-exports)
-   (module-scopes :initform '() :accessor semantic-program-module-scopes)))
+   (module-scopes :initform '() :accessor semantic-program-module-scopes)
+   ;; Concrete instances are not source declarations: they are generated from
+   ;; a polymorphic template and are the only representation sent to LLVM.
+   (function-specializations :initform '()
+                             :accessor semantic-program-function-specializations)))
 
 ;; PROGRAM is the multi-module semantic root.  It remains a SemanticProgram so
 ;; existing lowering clients continue to accept the returned object.
@@ -370,6 +443,9 @@ the semantic type of a unit expression remains UnitType."
 
 (defclass semantic-function-declaration (semantic-declaration)
   ((scope :initform nil :accessor semantic-function-declaration-scope)
+   (type-parameters :initform '()
+                    :accessor semantic-function-declaration-type-parameters)
+   (constraints :initform '() :accessor semantic-function-declaration-constraints)
    (parameters :initform '() :accessor semantic-function-declaration-parameters)
    (return-type-reference :initform nil
                           :accessor semantic-function-declaration-return-type-reference)
@@ -377,6 +453,28 @@ the semantic type of a unit expression remains UnitType."
                 :accessor semantic-function-declaration-return-type)
    (type :initform nil :accessor semantic-function-declaration-type)
    (body :initform nil :accessor semantic-function-declaration-body)))
+
+(defclass semantic-function-specialization (semantic-function-declaration)
+  ((template :initarg :template :reader semantic-function-specialization-template)
+   (type-arguments :initarg :type-arguments
+                   :reader semantic-function-specialization-type-arguments)
+   (resolving-p :initform nil :accessor semantic-function-specialization-resolving-p)))
+
+(defclass semantic-protocol-declaration (semantic-declaration)
+  ((protocol :initarg :protocol :reader semantic-protocol-declaration-protocol)))
+
+(defclass semantic-protocol-implementation (semantic-declaration)
+  ((implementation :initarg :implementation
+                   :reader semantic-protocol-implementation-implementation)))
+
+;; An operation implementation has an ordinary, fully concrete function body.
+;; Keeping its protocol identity here lets the backend give it a deterministic
+;; private symbol without placing its source spelling in the module namespace.
+(defclass semantic-protocol-operation-implementation (semantic-function-declaration)
+  ((implementation :initarg :implementation
+                   :reader semantic-protocol-operation-implementation-implementation)
+   (operation :initarg :operation
+              :reader semantic-protocol-operation-implementation-operation)))
 
 (defclass semantic-external-function-declaration (semantic-declaration)
   ((external-name :initarg :external-name :reader semantic-external-function-declaration-external-name)
@@ -434,11 +532,17 @@ the semantic type of a unit expression remains UnitType."
   ((callee :initarg :callee :reader semantic-call-callee)
    (arguments :initarg :arguments :reader semantic-call-arguments)))
 (defclass semantic-call (call-expression) ())
+(defclass polymorphic-call (semantic-call)
+  ((function :initarg :function :reader polymorphic-call-function)
+   (substitution :initarg :substitution :reader polymorphic-call-substitution)))
 (defclass external-call-expression (semantic-call)
   ((external-function :initarg :external-function
                       :reader external-call-expression-external-function)))
 (defclass primitive-call (semantic-call)
   ((operation :initarg :operation :reader primitive-call-operation)))
+(defclass protocol-operation-call (semantic-call)
+  ((operation :initarg :operation :reader protocol-operation-call-operation)
+   (constraint :initarg :constraint :reader protocol-operation-call-constraint)))
 ;; Conversion calls are a distinct semantic class so a backend can lower
 ;; them mechanically without inspecting primitive names or argument types.
 (defclass conversion-expression (primitive-call) ())
@@ -531,6 +635,7 @@ than recovered later through ad-hoc string comparisons."
 			       ("u32" nil 32) ("u64" nil 64)))
 	(destructuring-bind (name signed width) specification
 	  (bind-type name (type-context-integer-type type-context signed width))))
+	(bind-type "exit-code" (type-context-c-int-type type-context))
 	(bind-type "isize" (type-context-integer-type type-context t
 						     (type-context-pointer-width type-context)))
 	(bind-type "usize" (type-context-integer-type type-context nil
@@ -871,6 +976,7 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 	 (let ((binding (semantic-reference-binding resolved-type-syntax)))
 	   (cond ((typep binding 'builtin-type-binding)
 		  (builtin-type-binding-type binding))
+		 ((typep binding 'type-parameter) binding)
 		 ((typep binding 'type-declaration)
 		  (type-context-defined-type type-context binding))
 		 (t (error 'expected-type-error
@@ -892,6 +998,223 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 	   (type-context-array-type type-context element-type
 	                            (semantic-array-type-syntax-length resolved-type-syntax))))
 	(t (error "Unknown resolved type syntax ~S" resolved-type-syntax))))
+
+(define-condition duplicate-type-parameter-error (semantic-error) ()
+  (:default-initargs :message "DuplicateTypeParameter"))
+(define-condition unknown-protocol-error (semantic-error) ()
+  (:default-initargs :message "UnknownProtocol"))
+(define-condition protocol-arity-mismatch-error (semantic-error) ()
+  (:default-initargs :message "ProtocolArityMismatch"))
+(define-condition invalid-protocol-constraint-error (semantic-error) ()
+  (:default-initargs :message "InvalidProtocolConstraint"))
+(define-condition cannot-infer-type-parameter-error (semantic-error) ()
+  (:default-initargs :message "CannotInferTypeParameter"))
+(define-condition conflicting-type-inference-error (semantic-error) ()
+  (:default-initargs :message "ConflictingTypeInference"))
+
+(defun parse-type-parameter-list (declaration syntax)
+  (unless (verona-list-p (syntax-datum syntax))
+    (error 'semantic-error :syntax syntax :message "type parameters must be a list"))
+  (let ((parameters '()))
+    (loop for parameter-syntax in (verona-list-elements (syntax-datum syntax))
+          for index from 0
+          for name = (syntax-datum parameter-syntax)
+          do (unless (verona-name-p name)
+               (error 'semantic-error :syntax parameter-syntax
+                      :message "type parameter must be a Verona name"))
+             (when (find name parameters :key #'semantic-binding-name :test #'verona-name=)
+               (error 'duplicate-type-parameter-error :syntax parameter-syntax))
+             (push (make-instance 'type-parameter :name name :declaration declaration
+                                  :index index :source parameter-syntax)
+                   parameters))
+    (nreverse parameters)))
+
+(defun parse-for-clause (declaration syntax)
+  (unless (verona-list-p (syntax-datum syntax))
+    (error 'semantic-error :syntax syntax :message "for clause must be a list"))
+  (let ((elements (verona-list-elements (syntax-datum syntax))))
+    (unless (and (>= (length elements) 2)
+                 (verona-name-p (syntax-datum (first elements)))
+                 (string= (verona-name-value (syntax-datum (first elements))) "for")
+                 (<= (length elements) 3))
+      (error 'semantic-error :syntax syntax :message "expected (for (type-parameter*) (constraint*))"))
+    (let ((constraints (if (third elements) (third elements)
+                           (syntax-with-datum syntax (make-verona-list)))))
+      (unless (verona-list-p (syntax-datum constraints))
+        (error 'semantic-error :syntax constraints :message "for constraints must be a list"))
+      (make-instance 'for-clause :syntax syntax
+                     :type-parameters (parse-type-parameter-list declaration (second elements))
+                     :constraint-syntaxes (verona-list-elements (syntax-datum constraints))))))
+
+(defun resolve-protocol-constraint (scope syntax)
+  (unless (verona-list-p (syntax-datum syntax))
+    (error 'invalid-protocol-constraint-error :syntax syntax))
+  (let ((elements (verona-list-elements (syntax-datum syntax))))
+    (unless elements (error 'invalid-protocol-constraint-error :syntax syntax))
+    (let* ((head (resolve-name scope (first elements)))
+           (binding (semantic-reference-binding head)))
+      (unless (typep binding 'protocol-binding)
+        (error 'unknown-protocol-error :syntax (first elements)))
+      (let* ((protocol (protocol-binding-protocol binding))
+             (arguments (mapcar (lambda (argument)
+                                  (resolve-type (semantic-scope-owning-type-context scope)
+                                                (resolve-type-syntax scope argument)))
+                                (rest elements))))
+        (unless (= (length arguments) (length (protocol-type-parameters protocol)))
+          (error 'protocol-arity-mismatch-error :syntax syntax))
+        (make-instance 'protocol-constraint :protocol protocol :arguments arguments :source syntax)))))
+
+(defun protocol-find-implementation (protocol arguments)
+  (cdr (assoc arguments (protocol-implementations protocol) :test #'equal)))
+
+(defun protocol-add-implementation (protocol implementation syntax)
+  (when (protocol-find-implementation protocol (protocol-implementation-arguments implementation))
+    (error 'semantic-error :syntax syntax :message "DuplicateProtocolImplementation"))
+  (push (cons (protocol-implementation-arguments implementation) implementation)
+        (protocol-implementations protocol))
+  implementation)
+
+(defun resolve-protocol-operation-implementation
+    (program declaration implementation operation syntax)
+  "Resolve one implementation operation as a concrete private function."
+  (unless (verona-list-p (syntax-datum syntax))
+    (error 'semantic-error :syntax syntax :message "InvalidProtocolImplementation"))
+  (let ((parts (verona-list-elements (syntax-datum syntax))))
+    (unless (and (= (length parts) 5)
+                 (verona-name-p (syntax-datum (first parts)))
+                 (string= (verona-name-value (syntax-datum (first parts))) "function")
+                 (verona-name-p (syntax-datum (second parts)))
+                 (verona-list-p (syntax-datum (third parts))))
+      (error 'semantic-error :syntax syntax :message "InvalidProtocolImplementation"))
+    (let* ((context (semantic-program-type-context program))
+           (module-scope (semantic-program-module-scope-for
+                          program (declaration-module declaration)))
+           (scope (semantic-scope-child module-scope))
+           (substitution
+             (make-type-substitution
+              (mapcar #'cons
+                      (protocol-type-parameters (protocol-implementation-protocol implementation))
+                      (protocol-implementation-arguments implementation))))
+           (expected-parameter-types
+             (mapcar (lambda (parameter)
+                       (apply-type-substitution context (parameter-binding-type parameter)
+                                                substitution))
+                     (protocol-operation-parameters operation)))
+           (expected-result-type
+             (apply-type-substitution context (protocol-operation-result-type operation)
+                                      substitution))
+           (source-declaration
+             (make-instance 'function-declaration
+                            :name (syntax-datum (second parts)) :source syntax
+                            :expanded-syntax syntax :module (declaration-module declaration)
+                            :parameters (third parts) :return-type (fourth parts)
+                            :body (fifth parts)))
+           (parameters
+             (mapcar (lambda (parameter-syntax)
+                       (parse-parameter source-declaration parameter-syntax))
+                     (verona-list-elements (syntax-datum (third parts))))))
+      (unless (= (length parameters) (length expected-parameter-types))
+        (error 'semantic-error :syntax syntax :message "ProtocolOperationTypeMismatch"))
+      (loop for parameter in parameters
+            for expected-type in expected-parameter-types
+            do (let ((actual-type
+                       (resolve-type context
+                                     (resolve-type-syntax module-scope
+                                                          (parameter-binding-type-syntax parameter)))))
+                 (unless (same-type-p actual-type expected-type)
+                   (error 'semantic-error :syntax (parameter-binding-syntax parameter)
+                          :message "ProtocolOperationTypeMismatch"))
+                 (setf (parameter-binding-type parameter) actual-type))
+               (multiple-value-bind (existing foundp)
+                   (semantic-scope-local-find scope (semantic-binding-name parameter))
+                 (declare (ignore existing))
+                 (when foundp
+                   (error 'duplicate-local-binding-error
+                          :syntax (parameter-binding-syntax parameter)
+                          :name (semantic-binding-name parameter))))
+               (semantic-scope-bind scope (semantic-binding-name parameter) parameter))
+      (let ((actual-result-type
+              (resolve-type context (resolve-type-syntax module-scope (fourth parts)))))
+        (unless (same-type-p actual-result-type expected-result-type)
+          (error 'semantic-error :syntax (fourth parts) :message "ProtocolOperationTypeMismatch")))
+      (let ((operation-function
+              (make-instance 'semantic-protocol-operation-implementation
+                             :source-declaration source-declaration
+                             :implementation implementation :operation operation)))
+        (setf (semantic-function-declaration-scope operation-function) scope
+              (semantic-scope-function scope) operation-function
+              (semantic-function-declaration-parameters operation-function) parameters
+              (semantic-function-declaration-return-type operation-function) expected-result-type
+              (semantic-function-declaration-type operation-function)
+              (type-context-function-type context expected-parameter-types expected-result-type))
+        operation-function))))
+
+(defun resolve-protocol-implementation-signature (program semantic-declaration)
+  (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
+         (scope (semantic-program-module-scope-for program (declaration-module declaration)))
+         (application (implementation-declaration-protocol-application declaration)))
+    (unless (and application (verona-list-p (syntax-datum application)))
+      (error 'semantic-error :syntax (declaration-source declaration)
+             :message "InvalidProtocolImplementation"))
+    (let* ((elements (verona-list-elements (syntax-datum application)))
+           (head (and elements (resolve-name scope (first elements))))
+           (binding (and head (semantic-reference-binding head))))
+      (unless (typep binding 'protocol-binding)
+        (error 'unknown-protocol-error :syntax (first elements)))
+      (let* ((protocol (protocol-binding-protocol binding))
+             (arguments (mapcar (lambda (argument)
+                                  (resolve-type (semantic-program-type-context program)
+                                                (resolve-type-syntax scope argument)))
+                                (rest elements))))
+        (unless (= (length arguments) (length (protocol-type-parameters protocol)))
+          (error 'protocol-arity-mismatch-error :syntax application))
+        ;; Validate names and coverage now.  Function bodies are deliberately
+        ;; retained for the specialization stage, where their concrete target
+        ;; operation is available.
+        (let ((operation-names
+                (mapcar (lambda (operation-syntax)
+                          (unless (verona-list-p (syntax-datum operation-syntax))
+                            (error 'semantic-error :syntax operation-syntax
+                                   :message "MissingProtocolOperation"))
+                          (let ((parts (verona-list-elements (syntax-datum operation-syntax))))
+                            (unless (and (>= (length parts) 2)
+                                         (verona-name-p (syntax-datum (first parts)))
+                                         (string= (verona-name-value (syntax-datum (first parts))) "function")
+                                         (verona-name-p (syntax-datum (second parts))))
+                              (error 'semantic-error :syntax operation-syntax
+                                     :message "InvalidProtocolImplementation"))
+                            (syntax-datum (second parts))))
+                        (implementation-declaration-operations declaration))))
+          (dolist (operation (protocol-operations protocol))
+            (unless (find (protocol-operation-name operation) operation-names :test #'verona-name=)
+              (error 'semantic-error :syntax (declaration-source declaration)
+                     :message "MissingProtocolOperation")))
+          (when (/= (length operation-names) (length (remove-duplicates operation-names :test #'verona-name=)))
+            (error 'semantic-error :syntax (declaration-source declaration)
+                   :message "DuplicateProtocolOperation"))
+          (dolist (name operation-names)
+            (unless (find name (protocol-operations protocol)
+                          :key #'protocol-operation-name :test #'verona-name=)
+              (error 'semantic-error :syntax (declaration-source declaration)
+                     :message "InvalidProtocolImplementation")))
+          (let ((implementation
+                  (make-instance 'protocol-implementation :protocol protocol :arguments arguments
+                                 :source (declaration-source declaration))))
+            (setf (protocol-implementation-operations implementation)
+                  (mapcar (lambda (operation-syntax)
+                            (let* ((name (syntax-datum
+                                          (second (verona-list-elements
+                                                   (syntax-datum operation-syntax)))))
+                                   (operation (find name (protocol-operations protocol)
+                                                    :key #'protocol-operation-name
+                                                    :test #'verona-name=)))
+                              (cons operation
+                                    (resolve-protocol-operation-implementation
+                                     program declaration implementation operation operation-syntax))))
+                          (implementation-declaration-operations declaration)))
+            (protocol-add-implementation protocol implementation (declaration-source declaration))
+            (setf (slot-value semantic-declaration 'implementation) implementation)
+            implementation))))))
 
 (defun parse-parameter (function parameter-syntax)
   "Create a parameter entity from one (name type) syntax form."
@@ -917,16 +1240,22 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
     (unless (verona-list-p (syntax-datum parameters-syntax))
       (error 'semantic-error :syntax parameters-syntax
 			     :message "function parameters must be a list"))
-    (let ((scope (semantic-scope-child module-scope))
+    (let* ((scope (semantic-scope-child module-scope))
+	   (for-clause (and (function-declaration-for-clause declaration)
+			    (parse-for-clause declaration (function-declaration-for-clause declaration))))
+	   (type-parameters (and for-clause (for-clause-type-parameters for-clause)))
 	  (parameters
 	    (mapcar (lambda (syntax) (parse-parameter declaration syntax))
 		    (verona-list-elements (syntax-datum parameters-syntax)))))
-      ;; Parameter types are interface names, and so resolve in the module
-      ;; scope.  Binding parameters afterward avoids accidental access to a
-      ;; preceding parameter while interpreting this still-untyped syntax.
+      ;; Type parameters precede every signature component and are bindings,
+      ;; not text substitutions.  Resolve interface types through this child
+      ;; scope so ordinary module types remain visible while parameter names
+      ;; retain their declaration identity.
+      (dolist (type-parameter type-parameters)
+        (semantic-scope-bind scope (semantic-binding-name type-parameter) type-parameter))
       (dolist (parameter parameters)
 	(setf (parameter-binding-type-reference parameter)
-	      (resolve-type-syntax module-scope
+	      (resolve-type-syntax scope
 				   (parameter-binding-type-syntax parameter))))
       (dolist (parameter parameters)
 	(multiple-value-bind (existing foundp)
@@ -939,9 +1268,57 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
       (setf (semantic-function-declaration-scope semantic-declaration) scope
 	    (semantic-scope-function scope) semantic-declaration
 	    (semantic-function-declaration-parameters semantic-declaration) parameters
+	    (semantic-function-declaration-type-parameters semantic-declaration) type-parameters
+	    (semantic-function-declaration-constraints semantic-declaration)
+	    (if for-clause
+		(mapcar (lambda (constraint) (resolve-protocol-constraint scope constraint))
+			(for-clause-constraint-syntaxes for-clause))
+		'())
 	    (semantic-function-declaration-return-type-reference semantic-declaration)
-	    (resolve-type-syntax module-scope
+	    (resolve-type-syntax scope
 			 (function-declaration-return-type declaration))))))
+
+(defun resolve-protocol-signature (program semantic-declaration)
+  (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
+         (module-scope (semantic-program-module-scope-for program (declaration-module declaration)))
+         (protocol (semantic-protocol-declaration-protocol semantic-declaration))
+         (scope (semantic-scope-child module-scope))
+         (type-parameters (parse-type-parameter-list declaration
+                                                      (protocol-declaration-parameters declaration))))
+    (dolist (parameter type-parameters)
+      (semantic-scope-bind scope (semantic-binding-name parameter) parameter))
+    (setf (protocol-type-parameters protocol) type-parameters
+          (protocol-operations protocol)
+          (mapcar
+           (lambda (operation-syntax)
+             (unless (verona-list-p (syntax-datum operation-syntax))
+               (error 'semantic-error :syntax operation-syntax
+                      :message "protocol operation must be a (name parameters result) list"))
+             (let ((elements (verona-list-elements (syntax-datum operation-syntax))))
+               (unless (= (length elements) 3)
+                 (error 'semantic-error :syntax operation-syntax
+                        :message "protocol operation must have a name, parameters, and result type"))
+               (let ((name (syntax-datum (first elements))))
+                 (unless (verona-name-p name)
+                   (error 'semantic-error :syntax (first elements)
+                          :message "protocol operation name must be a Verona name"))
+                 (let ((parameters
+                         (mapcar (lambda (parameter-syntax)
+                                   (let ((parameter (parse-parameter declaration parameter-syntax)))
+                                     (setf (parameter-binding-type-reference parameter)
+                                           (resolve-type-syntax scope (parameter-binding-type-syntax parameter))
+                                           (parameter-binding-type parameter)
+                                           (resolve-type (semantic-program-type-context program)
+                                                         (parameter-binding-type-reference parameter)))
+                                     parameter))
+                                 (verona-list-elements (syntax-datum (second elements))))))
+                   (make-instance 'protocol-operation :protocol protocol :name name
+                                  :parameters parameters
+                                  :result-type (resolve-type (semantic-program-type-context program)
+                                                             (resolve-type-syntax scope (third elements)))
+                                  :source operation-syntax)))))
+           (protocol-declaration-operations declaration)))
+    protocol))
 
 (defun resolve-external-function-signature (program semantic-declaration)
   "Resolve an external declaration with ordinary Verona types only."
@@ -1011,6 +1388,11 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 	 (make-instance 'semantic-variable-declaration :source-declaration declaration))
 	((typep declaration 'function-declaration)
 	 (make-instance 'semantic-function-declaration :source-declaration declaration))
+	((typep declaration 'protocol-declaration)
+	 (let ((protocol (make-instance 'protocol :declaration declaration
+                                        :name (declaration-name declaration))))
+           (make-instance 'semantic-protocol-declaration :source-declaration declaration
+                          :protocol protocol)))
 	((typep declaration 'external-function-declaration)
 	 (make-instance 'semantic-external-function-declaration
                         :source-declaration declaration
@@ -1022,9 +1404,11 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
            (make-instance 'semantic-generic-declaration :source-declaration declaration
                           :generic generic)))
 	((typep declaration 'implementation-declaration)
-         (make-instance 'semantic-generic-implementation :source-declaration declaration
-                        :declaration declaration :source (declaration-source declaration)
-                        :name (declaration-name declaration)))
+         (if (implementation-declaration-protocol-application declaration)
+             (make-instance 'semantic-protocol-implementation :source-declaration declaration)
+             (make-instance 'semantic-generic-implementation :source-declaration declaration
+                            :declaration declaration :source (declaration-source declaration)
+                            :name (declaration-name declaration))))
 	;; Macro declarations have already been handled by the evaluator.
 	((typep declaration 'macro-declaration) nil)
 	(t (error "Unknown Verona declaration ~S" declaration))))
@@ -1034,10 +1418,14 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 	(scope (semantic-program-module-scope-for program (declaration-module declaration))))
     (cond ((typep semantic-declaration 'semantic-function-declaration)
 	   (resolve-function-signature program semantic-declaration))
+	  ((typep semantic-declaration 'semantic-protocol-declaration)
+	   (resolve-protocol-signature program semantic-declaration))
 	  ((typep semantic-declaration 'semantic-external-function-declaration)
 	   (resolve-external-function-signature program semantic-declaration))
 	  ((typep semantic-declaration 'semantic-generic-implementation)
            (resolve-generic-implementation-signature program semantic-declaration))
+	  ((typep semantic-declaration 'semantic-protocol-implementation)
+	   (resolve-protocol-implementation-signature program semantic-declaration))
 	  ((typep semantic-declaration 'semantic-constant-declaration)
 	   (setf (semantic-constant-declaration-type-reference semantic-declaration)
 		 (resolve-type-syntax scope (constant-declaration-type declaration))))
@@ -1367,6 +1755,132 @@ type checker."
   "Whether LEFT and RIGHT are the same canonical Verona type."
   (eq left right))
 
+(defun apply-type-substitution (context type substitution)
+  "Apply SUBSTITUTION structurally, preserving canonical compound types."
+  (cond ((typep type 'type-parameter)
+         (or (type-substitution-find substitution type) type))
+        ((typep type 'pointer-type)
+         (type-context-pointer-type context
+                                    (apply-type-substitution context
+                                                             (pointer-type-target type) substitution)))
+        ((typep type 'array-type)
+         (type-context-array-type context
+                                  (apply-type-substitution context
+                                                           (array-type-element-type type) substitution)
+                                  (array-type-length type)))
+        ((typep type 'function-type)
+         (type-context-function-type context
+                                     (mapcar (lambda (parameter)
+                                               (apply-type-substitution context parameter substitution))
+                                             (function-type-parameters type))
+                                     (apply-type-substitution context
+                                                              (function-type-result type) substitution)))
+        (t type)))
+
+(defun unify-types (expected actual substitution)
+  "Restricted local call-site unification.  EXPECTED owns the variables."
+  (cond ((typep expected 'type-parameter)
+         (let ((existing (type-substitution-find substitution expected)))
+           (cond ((null existing) (type-substitution-bind substitution expected actual) t)
+                 ((same-type-p existing actual) t)
+                 (t nil))))
+        ((and (typep expected 'pointer-type) (typep actual 'pointer-type))
+         (unify-types (pointer-type-target expected) (pointer-type-target actual) substitution))
+        ((and (typep expected 'array-type) (typep actual 'array-type)
+              (= (array-type-length expected) (array-type-length actual)))
+         (unify-types (array-type-element-type expected) (array-type-element-type actual) substitution))
+        (t (same-type-p expected actual))))
+
+(define-condition recursive-specialization-error (semantic-error) ()
+  (:default-initargs :message "RecursiveSpecialization"))
+
+(defun find-function-specialization (program template type-arguments)
+  (find-if (lambda (specialization)
+             (and (eq template (semantic-function-specialization-template specialization))
+                  (equal type-arguments
+                         (semantic-function-specialization-type-arguments specialization))))
+           (semantic-program-function-specializations program)))
+
+(defun ensure-function-specialization (program template substitution)
+  "Create or retrieve TEMPLATE instantiated with SUBSTITUTION.
+
+The specialization is registered before its body is resolved, so a direct
+recursive call can refer to the same concrete LLVM function."
+  (let* ((context (semantic-program-type-context program))
+         (type-parameters (semantic-function-declaration-type-parameters template))
+         (type-arguments (mapcar (lambda (parameter)
+                                   (apply-type-substitution context parameter substitution))
+                                 type-parameters))
+         (existing (find-function-specialization program template type-arguments)))
+    (when existing (return-from ensure-function-specialization existing))
+    (when (find-if (lambda (specialization)
+                     (eq template (semantic-function-specialization-template specialization)))
+                   (remove-if-not #'semantic-function-specialization-resolving-p
+                                  (semantic-program-function-specializations program)))
+      ;; A changing recursive instantiation would otherwise construct an
+      ;; unbounded set during semantic resolution.  Direct same-type recursion
+      ;; takes the existing-specialization branch above.
+      (error 'recursive-specialization-error
+             :syntax (declaration-source
+                      (semantic-declaration-source-declaration template))))
+    (let* ((source (semantic-declaration-source-declaration template))
+           (module-scope (semantic-program-module-scope-for program
+                                                              (declaration-module source)))
+           (scope (semantic-scope-child module-scope))
+           (parameters
+             (loop for parameter in (semantic-function-declaration-parameters template)
+                   collect (make-instance 'parameter-binding
+                                          :name (semantic-binding-name parameter)
+                                          :syntax (parameter-binding-syntax parameter)
+                                          :type-syntax (parameter-binding-type-syntax parameter))))
+           (specialization
+             (make-instance 'semantic-function-specialization
+                            :source-declaration source :template template
+                            :type-arguments type-arguments)))
+      (setf (semantic-program-function-specializations program)
+            (append (semantic-program-function-specializations program)
+                    (list specialization))
+            (semantic-function-declaration-scope specialization) scope
+            (semantic-scope-function scope) specialization
+            (semantic-function-declaration-parameters specialization) parameters
+            (semantic-function-declaration-return-type specialization)
+            (apply-type-substitution context
+                                     (semantic-function-declaration-return-type template)
+                                     substitution)
+            (semantic-function-declaration-constraints specialization)
+            (mapcar (lambda (constraint)
+                      (make-instance 'protocol-constraint
+                                     :protocol (protocol-constraint-protocol constraint)
+                                     :arguments
+                                     (mapcar (lambda (type)
+                                               (apply-type-substitution context type substitution))
+                                             (protocol-constraint-arguments constraint))
+                                     :source (protocol-constraint-source constraint)))
+                    (semantic-function-declaration-constraints template))
+            (semantic-function-declaration-type specialization)
+            (type-context-function-type
+             context
+             (mapcar (lambda (parameter)
+                       (apply-type-substitution context
+                                                (parameter-binding-type parameter)
+                                                substitution))
+                     (semantic-function-declaration-parameters template))
+             (semantic-function-declaration-return-type specialization))
+            (semantic-function-specialization-resolving-p specialization) t)
+      (loop for specialized in parameters
+            for template-parameter in (semantic-function-declaration-parameters template)
+            do (setf (parameter-binding-type specialized)
+                     (apply-type-substitution context
+                                              (parameter-binding-type template-parameter)
+                                              substitution))
+               (semantic-scope-bind scope (semantic-binding-name specialized) specialized))
+      (unwind-protect
+           (setf (semantic-function-declaration-body specialization)
+                 (check-expression (function-declaration-body source) scope
+                                   (semantic-function-declaration-return-type specialization)))
+        (setf (semantic-function-specialization-resolving-p specialization) nil))
+      specialization)))
+
 (defun sized-type-p (type)
   "Whether TYPE can be stored inline in a fixed Verona array."
   (not (typep type '(or void-type never-type function-type))))
@@ -1488,12 +2002,16 @@ they represent parameter storage rather than C's accidental value category."
   "Return the resolved ProductType selected by constructor head SYNTAX, if any."
   (when (or (verona-name-p (syntax-datum syntax))
             (qualified-name-p (syntax-datum syntax)))
-    (let ((binding (semantic-reference-binding (resolve-name scope syntax))))
-      (when (typep binding 'type-declaration)
-        (let* ((program (semantic-scope-owning-program scope))
-               (semantic (semantic-program-declaration program binding)))
-          (and (typep semantic 'semantic-type-declaration)
-               (semantic-type-declaration-type semantic)))))))
+    (handler-case
+        (let ((binding (semantic-reference-binding (resolve-name scope syntax))))
+          (when (typep binding 'type-declaration)
+            (let* ((program (semantic-scope-owning-program scope))
+                   (semantic (semantic-program-declaration program binding)))
+              (and (typep semantic 'semantic-type-declaration)
+                   (semantic-type-declaration-type semantic)))))
+      ;; An operation supplied only by protocol evidence is not a product
+      ;; constructor.  Leave its lookup to INFER-CALL-EXPRESSION.
+      (unresolved-name-error () nil))))
 
 (defun infer-construct-expression (syntax scope product-type argument-syntax)
   (let ((fields (product-type-fields product-type)))
@@ -1597,6 +2115,69 @@ they represent parameter storage rather than C's accidental value category."
       (when (and head (verona-name-p (syntax-datum head)))
         (sum-type-find-alternative expected-type (syntax-datum head))))))
 
+(defun find-constrained-protocol-operation (scope name)
+  "Find protocol-operation evidence for NAME in the enclosing function."
+  (let ((function (semantic-scope-owning-function scope)))
+    (when (and function (typep name 'verona-name)
+               (typep function 'semantic-function-declaration))
+      (loop for constraint in (semantic-function-declaration-constraints function)
+            for operation = (find name (protocol-operations
+                                        (protocol-constraint-protocol constraint))
+                                :key #'protocol-operation-name :test #'verona-name=)
+            when operation return (values operation constraint)))))
+
+(defun infer-protocol-operation-call (syntax scope operation constraint)
+  (let* ((elements (verona-list-elements (syntax-datum syntax)))
+         (arguments-syntax (rest elements))
+         (context (semantic-scope-owning-type-context scope))
+         (substitution (make-type-substitution
+                        (mapcar #'cons (protocol-type-parameters
+                                       (protocol-constraint-protocol constraint))
+                                (protocol-constraint-arguments constraint))))
+         (parameter-types
+           (mapcar (lambda (parameter)
+                     (apply-type-substitution context (parameter-binding-type parameter)
+                                              substitution))
+                   (protocol-operation-parameters operation))))
+    (unless (= (length arguments-syntax) (length parameter-types))
+      (error 'wrong-argument-count-error :syntax syntax :expected (length parameter-types)
+             :actual (length arguments-syntax)))
+    (let ((arguments (loop for argument in arguments-syntax
+                           for parameter-type in parameter-types
+                           collect (check-expression argument scope parameter-type))))
+      (let* ((result-type (apply-type-substitution context
+                                                    (protocol-operation-result-type operation)
+                                                    substitution))
+             (implementation
+               (and (every (lambda (type) (not (typep type 'type-parameter)))
+                           (protocol-constraint-arguments constraint))
+                    (protocol-find-implementation
+                     (protocol-constraint-protocol constraint)
+                     (protocol-constraint-arguments constraint))))
+             (operation-function
+               (and implementation
+                    (protocol-implementation-find-operation implementation operation))))
+        ;; A specialized body has concrete evidence, so erase the protocol
+        ;; call now.  The resulting ordinary semantic call is entirely
+        ;; backend-ready and LLVM never needs a protocol runtime object.
+        (if operation-function
+            (make-instance 'semantic-call :syntax syntax
+                           :callee (make-instance 'semantic-reference
+                                                  :syntax (first elements)
+                                                  :name (syntax-datum (first elements))
+                                                  :binding operation-function
+                                                  :type (semantic-function-declaration-type
+                                                         operation-function))
+                           :arguments arguments :type result-type)
+            (make-instance 'protocol-operation-call :syntax syntax
+                           :callee (make-instance 'semantic-reference :syntax (first elements)
+                                                  :name (syntax-datum (first elements))
+                                                  :binding operation
+                                                  :type (type-context-function-type
+                                                         context parameter-types result-type))
+                           :arguments arguments :operation operation :constraint constraint
+                           :type result-type))))))
+
 (defun infer-call-expression (syntax scope)
   (let* ((elements (verona-list-elements (syntax-datum syntax)))
 	 (head (first elements))
@@ -1604,6 +2185,17 @@ they represent parameter storage rather than C's accidental value category."
     (when (typep product-type 'product-type)
       (return-from infer-call-expression
         (infer-construct-expression syntax scope product-type (rest elements))))
+    ;; An unconstrained operation name remains an ordinary unresolved name.
+    ;; Only when no lexical binding exists may protocol evidence supply it.
+    (when (verona-name-p (syntax-datum head))
+      (multiple-value-bind (binding foundp)
+          (semantic-scope-find scope (syntax-datum head))
+        (when (or (not foundp) (typep binding 'protocol-binding))
+          (multiple-value-bind (operation constraint)
+              (find-constrained-protocol-operation scope (syntax-datum head))
+            (when operation
+              (return-from infer-call-expression
+                (infer-protocol-operation-call syntax scope operation constraint)))))))
     ;; Generics are resolved here, after arguments have concrete semantic
     ;; types, and are immediately replaced by a primitive or ordinary call.
     (when (or (verona-name-p (syntax-datum head))
@@ -1639,6 +2231,69 @@ they represent parameter storage rather than C's accidental value category."
                         (make-instance 'semantic-call :syntax syntax :callee callee
                                        :arguments arguments
                                        :type (generic-implementation-result-type implementation))))))))))
+    ;; Parametric functions infer only from value arguments.  This is local
+    ;; unification, not global Hindley--Milner inference.
+    (when (or (verona-name-p (syntax-datum head))
+              (qualified-name-p (syntax-datum head)))
+      (let* ((head-reference (resolve-name scope head))
+             (binding (semantic-reference-binding head-reference))
+             (program (semantic-scope-owning-program scope))
+             (function (and (typep binding 'function-declaration)
+                            (semantic-program-declaration program binding))))
+        (when (and (typep function 'semantic-function-declaration)
+                   (semantic-function-declaration-type-parameters function))
+          (let ((argument-syntax (rest elements))
+                (parameters (semantic-function-declaration-parameters function)))
+            (unless (= (length argument-syntax) (length parameters))
+              (error 'wrong-argument-count-error :syntax syntax
+                     :expected (length parameters) :actual (length argument-syntax)))
+            (let* ((arguments (mapcar (lambda (argument)
+                                        (infer-value-expression argument scope))
+                                      argument-syntax))
+                   (substitution (make-type-substitution)))
+              (loop for parameter in parameters
+                    for argument in arguments
+                    unless (unify-types (parameter-binding-type parameter)
+                                        (expression-type argument) substitution)
+                      do (error 'conflicting-type-inference-error :syntax syntax))
+              (dolist (parameter (semantic-function-declaration-type-parameters function))
+                (unless (type-substitution-find substitution parameter)
+                  (error 'cannot-infer-type-parameter-error :syntax syntax)))
+              (let* ((context (semantic-scope-owning-type-context scope)))
+                ;; Constraint solving is deliberately exact and concrete:
+                ;; instantiate each application, then look up one registered
+                ;; implementation.  There is no recursive search or ranking.
+                (dolist (constraint (semantic-function-declaration-constraints function))
+                  (let ((arguments (mapcar (lambda (type)
+                                             (apply-type-substitution context type substitution))
+                                           (protocol-constraint-arguments constraint))))
+                    (unless (every (lambda (type) (not (typep type 'type-parameter))) arguments)
+                      (error 'cannot-infer-type-parameter-error :syntax syntax))
+                    (unless (protocol-find-implementation
+                             (protocol-constraint-protocol constraint) arguments)
+                      (error 'semantic-error :syntax syntax
+                             :message "ProtocolConstraintNotSatisfied"))))
+	              (let* ((specialization
+                               (ensure-function-specialization
+                                (semantic-scope-owning-program scope) function substitution))
+	                     (parameter-types
+                       (mapcar (lambda (parameter)
+                                 (apply-type-substitution context
+                                                          (parameter-binding-type parameter)
+                                                          substitution))
+                               parameters))
+                     (result-type (apply-type-substitution
+                                   context
+                                   (semantic-function-declaration-return-type function)
+                                   substitution))
+	                     (callee-type (semantic-function-declaration-type specialization))
+	                     (callee (make-instance 'semantic-reference :syntax head
+	                                            :name (syntax-datum head) :binding specialization
+	                                            :type callee-type)))
+                (return-from infer-call-expression
+                  (make-instance 'polymorphic-call :syntax syntax :callee callee
+	                                 :arguments arguments :function specialization
+                                 :substitution substitution :type result-type)))))))))
     (let* ((callee (infer-expression head scope))
 	 (callee-type (expression-type callee)))
     (unless (typep callee-type 'function-type)
@@ -2488,6 +3143,25 @@ the primitive model."
        (unless (same-type-p (expression-type expression) (function-type-result callee-type))
 	 (backend-validation-fail expression "call result type disagrees with callee type"))))))
 
+(defun validate-concrete-function-for-backend (declaration)
+  "Validate one non-template function declaration for LLVM lowering."
+  (unless (null (semantic-function-declaration-type-parameters declaration))
+    (backend-validation-fail nil "LLVM received a polymorphic function template"))
+  (let ((type (semantic-function-declaration-type declaration)))
+    (unless (and (typep type 'function-type)
+                 (equal (function-type-parameters type)
+                        (mapcar #'parameter-binding-type
+                                (semantic-function-declaration-parameters declaration)))
+                 (same-type-p (function-type-result type)
+                              (semantic-function-declaration-return-type declaration)))
+      (backend-validation-fail nil "function signature is incomplete"))
+    (validate-expression-for-backend (semantic-function-declaration-body declaration))
+    (unless (or (typep (expression-type (semantic-function-declaration-body declaration)) 'never-type)
+                (same-type-p (expression-type (semantic-function-declaration-body declaration))
+                             (semantic-function-declaration-return-type declaration)))
+      (backend-validation-fail (semantic-function-declaration-body declaration)
+                               "function result is not exactly typed"))))
+
 (defun validate-for-backend (program)
   "Final frontend gate: return PROGRAM only when LLVM lowering is mechanical."
   (check-type program semantic-program)
@@ -2508,20 +3182,11 @@ the primitive model."
     (dolist (entry (semantic-program-declarations program))
       (let ((declaration (cdr entry)))
 	(cond ((typep declaration 'semantic-function-declaration)
-	       (let ((type (semantic-function-declaration-type declaration)))
-		 (unless (and (typep type 'function-type)
-			      (equal (function-type-parameters type)
-				     (mapcar #'parameter-binding-type
-					     (semantic-function-declaration-parameters declaration)))
-			      (same-type-p (function-type-result type)
-				   (semantic-function-declaration-return-type declaration)))
-		   (backend-validation-fail nil "function signature is incomplete"))
-		 (validate-expression-for-backend (semantic-function-declaration-body declaration))
-		 (unless (or (typep (expression-type (semantic-function-declaration-body declaration)) 'never-type)
-			     (same-type-p (expression-type (semantic-function-declaration-body declaration))
-				  (semantic-function-declaration-return-type declaration)))
-		   (backend-validation-fail (semantic-function-declaration-body declaration)
-					    "function result is not exactly typed"))))
+	       ;; A polymorphic declaration is a template.  Its body contains
+	       ;; TypeParameter identities by design and becomes LLVM-ready only
+	       ;; after a concrete specialization has been selected.
+	       (unless (semantic-function-declaration-type-parameters declaration)
+	         (validate-concrete-function-for-backend declaration)))
 	      ((typep declaration 'semantic-external-function-declaration)
 	       (let ((type (semantic-external-function-declaration-type declaration)))
 		 (unless (and (typep type 'function-type)
@@ -2592,7 +3257,18 @@ the primitive model."
 		 (validate-expression-for-backend initializer)
 		 (unless (same-type-p (expression-type initializer)
 				      (semantic-variable-declaration-type declaration))
-		   (backend-validation-fail initializer "variable initializer is not exactly typed")))))))
+		   (backend-validation-fail initializer "variable initializer is not exactly typed"))))))
+	;; Generated instances are not source declarations, so validate their
+	;; complete substituted bodies separately.  This is the final guarantee
+	;; that LLVM never observes a TypeParameter or unresolved protocol call.
+	(dolist (entry (semantic-program-declarations program))
+	  (let ((declaration (cdr entry)))
+	    (when (typep declaration 'semantic-protocol-implementation)
+	      (dolist (operation (protocol-implementation-operations
+	                          (semantic-protocol-implementation-implementation declaration)))
+	        (validate-concrete-function-for-backend (cdr operation))))))
+	(dolist (specialization (semantic-program-function-specializations program))
+	  (validate-concrete-function-for-backend specialization)))
   program))
 
 (defun resolve-declaration-body (program semantic-declaration)
@@ -2609,6 +3285,16 @@ the primitive model."
                   (implementation-declaration-body declaration)
                   (semantic-generic-implementation-scope semantic-declaration)
                   (generic-implementation-result-type semantic-declaration))))
+	  ((typep semantic-declaration 'semantic-protocol-implementation)
+           (dolist (entry (protocol-implementation-operations
+                           (semantic-protocol-implementation-implementation semantic-declaration)))
+             (let ((operation-function (cdr entry)))
+               (setf (semantic-function-declaration-body operation-function)
+                     (check-expression
+                      (function-declaration-body
+                       (semantic-declaration-source-declaration operation-function))
+                      (semantic-function-declaration-scope operation-function)
+                      (semantic-function-declaration-return-type operation-function))))))
 	  ((typep semantic-declaration 'semantic-constant-declaration)
 	   (setf (semantic-constant-declaration-initializer semantic-declaration)
 		 (check-expression
@@ -2670,6 +3356,12 @@ ready for lowering as one LLVM module."
                                       (make-instance 'generic-binding
                                                      :name (declaration-name declaration)
                                                      :generic generic))))
+              ((typep semantic-declaration 'semantic-protocol-declaration)
+               (semantic-scope-bind module-scope (declaration-name declaration)
+                                    (make-instance 'protocol-binding
+                                                   :name (declaration-name declaration)
+                                                   :protocol (semantic-protocol-declaration-protocol
+                                                              semantic-declaration))))
               ((not (typep declaration 'implementation-declaration))
                (semantic-scope-bind module-scope (declaration-name declaration) declaration)))))
     (dolist (entry (semantic-program-declarations program))

@@ -11,7 +11,7 @@
     (unwind-protect
          (progn
            (with-open-file (stream source :direction :output :if-exists :supersede)
-             (write-string "(function main () unit unit)" stream))
+             (write-string "(function main () exit-code 0)" stream))
            (let ((artifact (verona.compiler:compile-root driver source
                                                           :artifact-kind :object :output object)))
              (is (typep artifact 'verona.compiler:object-artifact))
@@ -25,7 +25,7 @@
       (when (probe-file source) (delete-file source))
       (when (probe-file object) (delete-file object))))))
 
-(test compiler-driver-links-unit-main
+(test compiler-driver-links-integer-main
   (let* ((source (merge-pathnames (format nil "verona-driver-~A.vrn" (gensym "TEST-"))
                                   (uiop:temporary-directory)))
          (executable (merge-pathnames (format nil "verona-driver-~A" (gensym "TEST-"))
@@ -33,7 +33,7 @@
     (unwind-protect
          (progn
            (with-open-file (stream source :direction :output :if-exists :supersede)
-             (write-string "(function main () unit unit)" stream))
+             (write-string "(function main () exit-code 0)" stream))
            (verona.compiler:compile-root (verona.compiler:make-compiler-driver) source
                                          :artifact-kind :executable :output executable)
            (is (zerop (nth-value 2 (uiop:run-program (list (namestring executable))

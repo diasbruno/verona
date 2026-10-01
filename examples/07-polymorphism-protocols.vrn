@@ -1,0 +1,21 @@
+(protocol display (a)
+  (display ((value a)) exit-code))
+
+(implementation (display exit-code)
+  (function display
+    ((value exit-code))
+    exit-code
+    value))
+
+(function print
+  (for (a)
+    ((display a)))
+  ((value a))
+  exit-code
+  (display value))
+
+(function answer () exit-code
+  42)
+
+(function main () exit-code
+  (print (answer)))

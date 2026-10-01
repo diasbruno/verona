@@ -1,9 +1,9 @@
-(type option (sum (none) (some i64)))
+(type option (sum (none) (some exit-code)))
 
-(function unwrap ((value option)) i64
+(function unwrap ((value option)) exit-code
   (match value
     ((none) 0)
     ((some number) number)))
 
-(function main () i64
+(function main () exit-code
   (unwrap (some 42)))

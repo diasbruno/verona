@@ -1,12 +1,35 @@
 (in-package #:verona.backend.llvm)
 
+(defun protocol-operation-implementation-llvm-name (declaration)
+  (let ((implementation
+          (verona:semantic-protocol-operation-implementation-implementation declaration)))
+    (format nil "~A_protocol_~A_~{~A~^_~}"
+            (llvm-name (semantic-source-binding declaration))
+            (verona:verona-name-value
+             (verona:protocol-operation-name
+              (verona:semantic-protocol-operation-implementation-operation declaration)))
+            (mapcar #'llvm-type-mangle
+                    (verona:protocol-implementation-arguments implementation)))))
+
 (defun declare-function (backend declaration)
   (let* ((source (semantic-source-binding declaration))
          (function (llvm:add-function
-                    (llvm-backend-module backend) (llvm-name source)
+                    (llvm-backend-module backend)
+                    (cond ((typep declaration 'verona:semantic-function-specialization)
+                           (format nil "~A_spec_~{~A~^_~}"
+                                   (llvm-name source)
+                                   (mapcar #'llvm-type-mangle
+                                           (verona:semantic-function-specialization-type-arguments
+                                            declaration))))
+                          ((typep declaration 'verona:semantic-protocol-operation-implementation)
+                           (protocol-operation-implementation-llvm-name declaration))
+                          (t (llvm-name source)))
                     (lower-type backend (verona:semantic-function-declaration-type declaration)))))
-    (setf (backend-binding backend source) function
-          (backend-binding backend declaration) function)
+    ;; A template can have many concrete instances; never attach a
+    ;; specialization to its source declaration's backend key.
+    (unless (typep declaration 'verona:semantic-function-specialization)
+      (setf (backend-binding backend source) function))
+    (setf (backend-binding backend declaration) function)
     function))
 
 (defun declare-external-function (backend declaration)

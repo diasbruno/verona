@@ -237,7 +237,7 @@ in-memory LLVM module, verification, object emission, and toolchain handoff."
                     (error (condition)
                       (if (typep condition 'verona:compiler-bug)
                           (error condition)
-                          (error 'llvm-verification-failure :message (princ-to-string condition))))))
+                          (error 'llvm-verification-failure :message (princ-to-string condition)))))))
     (when (eq artifact-kind :executable)
       (handler-case (add-platform-entry-wrapper backend program)
         (error (condition)

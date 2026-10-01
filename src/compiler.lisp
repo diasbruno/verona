@@ -157,7 +157,9 @@
   ((body :initarg :body :reader type-declaration-body)))
 
 (defclass function-declaration (declaration)
-  ((parameters :initarg :parameters :reader function-declaration-parameters)
+  ((for-clause :initarg :for-clause :initform nil
+               :reader function-declaration-for-clause)
+   (parameters :initarg :parameters :reader function-declaration-parameters)
    (return-type :initarg :return-type :reader function-declaration-return-type)
    (body :initarg :body :reader function-declaration-body)))
 
@@ -185,10 +187,26 @@
    (arity :initarg :arity :reader generic-declaration-arity)))
 
 (defclass implementation-declaration (declaration)
-  ((generic-name :initarg :generic-name :reader implementation-declaration-generic-name)
-   (parameters :initarg :parameters :reader implementation-declaration-parameters)
-   (return-type :initarg :return-type :reader implementation-declaration-return-type)
-   (body :initarg :body :reader implementation-declaration-body)))
+  ((generic-name :initarg :generic-name :initform nil
+                 :reader implementation-declaration-generic-name)
+   (parameters :initarg :parameters :initform nil
+               :reader implementation-declaration-parameters)
+   (return-type :initarg :return-type :initform nil
+                :reader implementation-declaration-return-type)
+   (body :initarg :body :initform nil :reader implementation-declaration-body)
+   ;; The older concrete generic implementation spelling remains supported;
+   ;; a non-NIL application selects the Step 18 protocol form.
+   (protocol-application :initarg :protocol-application :initform nil
+                         :reader implementation-declaration-protocol-application)
+   (operations :initarg :operations :initform '()
+               :reader implementation-declaration-operations)))
+
+;; Protocol declarations deliberately retain their operation forms as source
+;; syntax.  Their parameter names are type-level bindings, and therefore may
+;; only be interpreted after the module's semantic scope has been created.
+(defclass protocol-declaration (declaration)
+  ((parameters :initarg :parameters :reader protocol-declaration-parameters)
+   (operations :initarg :operations :reader protocol-declaration-operations)))
 
 (define-condition definition-error (user-compilation-error)
   ((syntax :initarg :syntax :reader definition-error-syntax)
@@ -252,7 +270,7 @@ result object avoids treating an ordinary list expression as several forms."
   (definitions '() :type list))
 
 (defparameter +definition-form-names+
-  '("%type" "%function" "%external-function" "%macro" "%constant" "%variable" "%generic" "%implementation"))
+  '("%type" "%function" "%external-function" "%macro" "%constant" "%variable" "%generic" "%implementation" "%protocol"))
 
 (defun definition-head-name (syntax)
   "Return SYNTAX's definition-form name, or NIL when it is not one."
@@ -403,13 +421,18 @@ expands syntax; this processor is the boundary that creates compiler objects."
                (make-declaration 'type-declaration name :body (rest arguments))))
             ((string= head "%function")
              (let ((arguments (definition-elements expanded-syntax "function" 4)))
-              (unless (= (length arguments) 4)
-                 (definition-fail expanded-syntax "%function requires a name, parameters, return type, and body"))
-               (make-declaration 'function-declaration
-                                 (definition-name expanded-syntax (first arguments))
-                                 :parameters (second arguments)
-                                 :return-type (third arguments)
-                                 :body (fourth arguments))))
+               ;; A FOR clause is declaration syntax, not an expression.  It
+               ;; is retained verbatim here and parsed at the semantic
+               ;; boundary, where protocol names and type parameters exist.
+               (unless (member (length arguments) '(4 5))
+                 (definition-fail expanded-syntax "%function requires a name, optional for clause, parameters, return type, and body"))
+               (let ((polymorphic-p (= (length arguments) 5)))
+                 (make-declaration 'function-declaration
+                                   (definition-name expanded-syntax (first arguments))
+                                   :for-clause (and polymorphic-p (second arguments))
+                                   :parameters (if polymorphic-p (third arguments) (second arguments))
+                                   :return-type (if polymorphic-p (fourth arguments) (third arguments))
+                                   :body (if polymorphic-p (fifth arguments) (fourth arguments))))))
             ((string= head "%external-function")
              (let ((arguments (definition-elements expanded-syntax "external-function" 4)))
                (unless (= (length arguments) 4)
@@ -464,23 +487,39 @@ expands syntax; this processor is the boundary that creates compiler objects."
                       (names (generic-parameter-names expanded-syntax parameters)))
                  (make-declaration 'generic-declaration name
                                    :parameters names :arity (length names)))))
+            ((string= head "%protocol")
+             (let ((arguments (definition-elements expanded-syntax "protocol" 2)))
+               (unless (>= (length arguments) 2)
+                 (definition-fail expanded-syntax "%protocol requires a name and type parameter list"))
+               (let ((parameters (second arguments)))
+                 (unless (verona-list-p (syntax-datum parameters))
+                   (definition-fail parameters "%protocol type parameters must be a list"))
+                 (make-declaration 'protocol-declaration
+                                   (definition-name expanded-syntax (first arguments))
+                                   :parameters parameters :operations (cddr arguments)))) )
             ((string= head "%implementation")
-             (let ((arguments (definition-elements expanded-syntax "implementation" 4)))
-               (unless (= (length arguments) 4)
-                 (definition-fail expanded-syntax "%implementation requires a generic name, parameters, return type, and body"))
+             (let ((arguments (definition-elements expanded-syntax "implementation" 2)))
                (let ((target (syntax-datum (first arguments))))
-                 (unless (or (verona-name-p target) (qualified-name-p target))
-                   (definition-fail expanded-syntax "implementation target must be a name"))
+                 (if (verona-list-p target)
+                     (make-declaration 'implementation-declaration
+                                       (make-verona-name "implementation")
+                                       :protocol-application (first arguments)
+                                       :operations (rest arguments))
+                     (progn
+                       (unless (= (length arguments) 4)
+                         (definition-fail expanded-syntax "%implementation requires a generic name, parameters, return type, and body"))
+                       (unless (or (verona-name-p target) (qualified-name-p target))
+                         (definition-fail expanded-syntax "implementation target must be a name"))
                  ;; Implementations do not occupy the ordinary declaration
                  ;; namespace.  Keep a local Name for diagnostics while
                  ;; retaining a structured QualifiedName target for the
                  ;; ownership validation in semantic resolution.
-                 (make-declaration 'implementation-declaration
-                                   (if (qualified-name-p target)
-                                       (qualified-name-name target) target)
-                                   :generic-name target
-                                   :parameters (second arguments) :return-type (third arguments)
-				   :body (fourth arguments)))))))))
+                       (make-declaration 'implementation-declaration
+                                         (if (qualified-name-p target)
+                                             (qualified-name-name target) target)
+                                         :generic-name target
+                                         :parameters (second arguments) :return-type (third arguments)
+				         :body (fourth arguments)))))))))))
 
 (defun expand-top-level (syntax environment)
   "Expand SYNTAX into a TOP-LEVEL-EXPANSION-RESULT.

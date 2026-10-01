@@ -74,7 +74,7 @@
            (ensure-directories-exist (merge-pathnames ".directory" source-directory))
            (with-open-file (stream (merge-pathnames "app.main.vrn" source-directory)
                                    :direction :output :if-exists :supersede)
-             (write-string "(function main () unit unit)" stream))
+             (write-string "(function main () exit-code 0)" stream))
            (dolist (name '("core.vrn" "plugin.vrn"))
              (with-open-file (stream (merge-pathnames name source-directory)
                                      :direction :output :if-exists :supersede)

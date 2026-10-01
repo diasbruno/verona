@@ -34,6 +34,7 @@
    #:+error-severity+
    #:+warning-severity+
    #:diagnostic-code-for
+   #:condition-primary-range
    #:diagnostic-for-condition
    #:render-diagnostic
    #:user-compilation-error
@@ -161,6 +162,7 @@
    #:type-declaration
    #:type-declaration-body
    #:function-declaration
+   #:function-declaration-for-clause
    #:function-declaration-parameters
    #:function-declaration-return-type
    #:function-declaration-body
@@ -185,6 +187,11 @@
    #:implementation-declaration-parameters
    #:implementation-declaration-return-type
    #:implementation-declaration-body
+   #:implementation-declaration-protocol-application
+   #:implementation-declaration-operations
+   #:protocol-declaration
+   #:protocol-declaration-parameters
+   #:protocol-declaration-operations
    #:semantic-scope
    #:make-semantic-scope
    #:semantic-scope-parent
@@ -208,6 +215,7 @@
    #:program-module-graph
    #:program-target
    #:semantic-program-native-exports
+   #:semantic-program-function-specializations
    #:native-export-binding
    #:native-export-binding-function
    #:native-export-binding-external-name
@@ -248,11 +256,24 @@
    #:semantic-variable-declaration-initializer
    #:semantic-function-declaration
    #:semantic-function-declaration-scope
+   #:semantic-function-declaration-type-parameters
+   #:semantic-function-declaration-constraints
    #:semantic-function-declaration-parameters
    #:semantic-function-declaration-return-type-reference
    #:semantic-function-declaration-return-type
    #:semantic-function-declaration-type
    #:semantic-function-declaration-body
+   #:semantic-function-specialization
+   #:semantic-function-specialization-template
+   #:semantic-function-specialization-type-arguments
+   #:semantic-function-specialization-resolving-p
+   #:semantic-protocol-declaration
+   #:semantic-protocol-declaration-protocol
+   #:semantic-protocol-implementation
+   #:semantic-protocol-implementation-implementation
+   #:semantic-protocol-operation-implementation
+   #:semantic-protocol-operation-implementation-implementation
+   #:semantic-protocol-operation-implementation-operation
    #:semantic-external-function-declaration
    #:semantic-external-function-declaration-external-name
    #:semantic-external-function-declaration-parameter-type-references
@@ -309,6 +330,12 @@
    #:semantic-call
    #:semantic-call-callee
    #:semantic-call-arguments
+   #:polymorphic-call
+   #:polymorphic-call-function
+   #:polymorphic-call-substitution
+   #:protocol-operation-call
+   #:protocol-operation-call-operation
+   #:protocol-operation-call-constraint
    #:external-call-expression
    #:external-call-expression-external-function
    #:call-expression
@@ -383,6 +410,46 @@
    #:semantic-array-type-syntax-element-type
    #:semantic-array-type-syntax-length
    #:verona-type
+   #:type-parameter
+   #:type-parameter-declaration
+   #:type-parameter-index
+   #:type-parameter-source
+   #:type-substitution
+   #:make-type-substitution
+   #:type-substitution-entries
+   #:type-substitution-find
+   #:type-substitution-bind
+   #:apply-type-substitution
+   #:unify-types
+   #:for-clause
+   #:for-clause-syntax
+   #:for-clause-type-parameters
+   #:for-clause-constraint-syntaxes
+   #:protocol
+   #:protocol-declaration
+   #:protocol-name
+   #:protocol-type-parameters
+   #:protocol-operations
+   #:protocol-implementations
+   #:protocol-binding
+   #:protocol-binding-protocol
+   #:protocol-operation
+   #:protocol-operation-protocol
+   #:protocol-operation-name
+   #:protocol-operation-parameters
+   #:protocol-operation-result-type
+   #:protocol-operation-source
+   #:protocol-constraint
+   #:protocol-constraint-protocol
+   #:protocol-constraint-arguments
+   #:protocol-constraint-source
+   #:protocol-implementation
+   #:protocol-implementation-protocol
+   #:protocol-implementation-arguments
+   #:protocol-implementation-operations
+   #:protocol-implementation-source
+   #:protocol-implementation-find-operation
+   #:protocol-find-implementation
    #:unit-type
    #:void-type
    #:never-type
@@ -432,6 +499,7 @@
    #:unit-machine-representation
    #:type-context-boolean-type
    #:type-context-string-type
+   #:type-context-c-int-type
    #:type-context-integer-type
    #:type-context-float-type
    #:type-context-pointer-type
@@ -473,6 +541,13 @@
    #:generic-arity-mismatch-error
    #:generic-arity-mismatch-error-generic
    #:generic-arity-mismatch-error-actual
+   #:duplicate-type-parameter-error
+   #:unknown-protocol-error
+   #:protocol-arity-mismatch-error
+   #:invalid-protocol-constraint-error
+   #:cannot-infer-type-parameter-error
+   #:conflicting-type-inference-error
+   #:recursive-specialization-error
    #:duplicate-generic-implementation-error
    #:duplicate-generic-implementation-error-generic
    #:duplicate-generic-implementation-error-parameter-types
