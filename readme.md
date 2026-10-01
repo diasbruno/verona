@@ -171,19 +171,3 @@ disclaimer.
 
 The name is inspired by Verona, the city in Italy—and by Verona, one of the
 author's cats.
-
-## Roadmap
-
-```text
-Step 20 — Arrays + memory operations
-Step 21 — C FFI / ABI
-Step 22 — Modules / namespaces
-Step 23 — Standard library foundation
-Step 24 — Diagnostics + compiler hardening
-Step 25 — Self-hosting groundwork, if pursued
-
-Later — Recursive types
-        recursive products and sums
-        mutual recursion, sizedness, and forward type identities
-        LLVM incomplete/identified types
-```
