@@ -20,7 +20,8 @@
    (bindings :initform (make-hash-table :test #'eq)
              :reader llvm-backend-bindings)
    (types :initform (make-hash-table :test #'eq)
-          :reader llvm-backend-types)))
+          :reader llvm-backend-types)
+   (trap-function :initform nil :accessor llvm-backend-trap-function)))
 
 (defun make-llvm-backend (&key (module-name "verona")
                                (target-configuration (make-target-configuration))
@@ -98,6 +99,9 @@ iteration order."
          (format nil "f~D" (verona:float-type-width type)))
         ((typep type 'verona:pointer-type)
          (format nil "p_~A" (llvm-type-mangle (verona:pointer-type-pointee type))))
+        ((typep type 'verona:array-type)
+         (format nil "a~D_~A" (verona:array-type-length type)
+                 (llvm-type-mangle (verona:array-type-element-type type))))
         ((typep type 'verona:defined-type)
          (llvm-name (verona:defined-type-declaration type)))
         ;; Function types cannot currently be generic arguments, but retain a

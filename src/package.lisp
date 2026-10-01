@@ -323,6 +323,13 @@
    #:sum-construct-expression
    #:sum-construct-expression-alternative
    #:sum-construct-expression-arguments
+   #:array-construct-expression
+   #:array-construct-expression-elements
+   #:index-expression
+   #:index-expression-base
+   #:index-expression-index
+   #:index-expression-element-type
+   #:index-place
    #:field-expression
    #:field-expression-value
    #:field-expression-field
@@ -372,6 +379,9 @@
    #:semantic-unit-type-syntax
    #:semantic-pointer-type-syntax
    #:semantic-pointer-type-syntax-target
+   #:semantic-array-type-syntax
+   #:semantic-array-type-syntax-element-type
+   #:semantic-array-type-syntax-length
    #:verona-type
    #:unit-type
    #:void-type
@@ -386,6 +396,9 @@
    #:pointer-type
    #:pointer-type-target
    #:pointer-type-pointee
+   #:array-type
+   #:array-type-element-type
+   #:array-type-length
    #:function-type
    #:function-type-parameters
    #:function-type-result
@@ -422,6 +435,7 @@
    #:type-context-integer-type
    #:type-context-float-type
    #:type-context-pointer-type
+   #:type-context-array-type
    #:type-context-function-type
    #:type-context-defined-type
    #:type-context-product-type
@@ -453,6 +467,9 @@
    #:type-mismatch-error
    #:type-mismatch-error-actual
    #:type-mismatch-error-expected
+   #:cannot-infer-array-element-type-error
+   #:array-element-type-mismatch-error
+   #:array-index-out-of-bounds-error
    #:generic-arity-mismatch-error
    #:generic-arity-mismatch-error-generic
    #:generic-arity-mismatch-error-actual

@@ -31,6 +31,9 @@
   ((width :initarg :width :reader float-type-width)))
 (defclass pointer-type (verona-type)
   ((target :initarg :target :reader pointer-type-target :reader pointer-type-pointee)))
+(defclass array-type (verona-type)
+  ((element-type :initarg :element-type :reader array-type-element-type)
+   (length :initarg :length :reader array-type-length)))
 (defclass function-type (verona-type)
   ((parameters :initarg :parameters :reader function-type-parameters)
    (result :initarg :result :reader function-type-result)))
@@ -72,6 +75,7 @@
    (integer-types :initform '() :accessor type-context-integer-types)
    (float-types :initform '() :accessor type-context-float-types)
    (pointer-types :initform '() :accessor type-context-pointer-types)
+   (array-types :initform '() :accessor type-context-array-types)
    (function-types :initform '() :accessor type-context-function-types)
    ;; This association uses declaration object identity, never its spelling.
    (defined-types :initform '() :accessor type-context-defined-types)))
@@ -131,6 +135,17 @@ the semantic type of a unit expression remains UnitType."
       (let ((type (make-instance 'pointer-type :target target)))
 	(push (cons target type) (type-context-pointer-types context))
 	type)))
+
+(defun type-context-array-type (context element-type length)
+  "Return the canonical fixed array type for ELEMENT-TYPE and LENGTH."
+  (check-type element-type verona-type)
+  (unless (and (integerp length) (<= 0 length))
+    (error "array length must be a non-negative integer, not ~S" length))
+  (let ((key (cons element-type length)))
+    (or (cdr (assoc key (type-context-array-types context) :test #'equal))
+        (let ((type (make-instance 'array-type :element-type element-type :length length)))
+          (push (cons key type) (type-context-array-types context))
+          type))))
 
 (defun type-context-function-type (context parameters result)
   "Return the canonical function type with PARAMETERS and RESULT in CONTEXT."
@@ -273,6 +288,9 @@ the semantic type of a unit expression remains UnitType."
 (defclass semantic-unit-type-syntax (semantic-type-syntax) ())
 (defclass semantic-pointer-type-syntax (semantic-type-syntax)
   ((target :initarg :target :reader semantic-pointer-type-syntax-target)))
+(defclass semantic-array-type-syntax (semantic-type-syntax)
+  ((element-type :initarg :element-type :reader semantic-array-type-syntax-element-type)
+   (length :initarg :length :reader semantic-array-type-syntax-length)))
 
 (defclass parameter-binding (semantic-binding)
   ((syntax :initarg :syntax :reader parameter-binding-syntax)
@@ -432,6 +450,13 @@ the semantic type of a unit expression remains UnitType."
 (defclass sum-construct-expression (semantic-expression)
   ((alternative :initarg :alternative :reader sum-construct-expression-alternative)
    (arguments :initarg :arguments :reader sum-construct-expression-arguments)))
+(defclass array-construct-expression (semantic-expression)
+  ((elements :initarg :elements :reader array-construct-expression-elements)))
+(defclass index-expression (semantic-expression)
+  ((base :initarg :base :reader index-expression-base)
+   (index :initarg :index :reader index-expression-index)
+   (element-type :initarg :element-type :reader index-expression-element-type)))
+(defclass index-place (index-expression place-expression) ())
 (defclass field-expression (semantic-expression)
   ((value :initarg :value :reader field-expression-value)
    (field :initarg :field :reader field-expression-field)))
@@ -766,18 +791,32 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 	  ((unit-literal-p datum)
 	   (make-instance 'semantic-unit-type-syntax :syntax syntax))
 	  ((verona-list-p datum)
-	   (let ((elements (verona-list-elements datum)))
-	     (unless (= (length elements) 2)
-	       (error 'semantic-error :syntax syntax
-				      :message "a type constructor requires exactly one argument"))
-	     (let ((head (syntax-datum (first elements))))
-	       (unless (and (verona-name-p head)
-			    (string= (verona-name-value head) "pointer"))
-		 (error 'semantic-error :syntax (first elements)
-					:message "unknown type constructor"))
-	       (make-instance 'semantic-pointer-type-syntax
-			      :syntax syntax
-			      :target (resolve-type-syntax scope (second elements))))))
+	   (let* ((elements (verona-list-elements datum))
+	          (head-syntax (first elements))
+	          (head (and head-syntax (syntax-datum head-syntax))))
+	     (unless (and head (verona-name-p head))
+	       (error 'semantic-error :syntax syntax :message "expected a type constructor"))
+	     (cond
+	       ((string= (verona-name-value head) "pointer")
+	        (unless (= (length elements) 2)
+	          (error 'semantic-error :syntax syntax
+	                 :message "pointer requires exactly one argument"))
+	        (make-instance 'semantic-pointer-type-syntax
+	                       :syntax syntax
+	                       :target (resolve-type-syntax scope (second elements))))
+	       ((string= (verona-name-value head) "array")
+	        (unless (= (length elements) 3)
+	          (error 'semantic-error :syntax syntax
+	                 :message "array requires an element type and length"))
+	        (let ((length (syntax-datum (third elements))))
+	          (unless (and (integerp length) (<= 0 length))
+	            (error 'semantic-error :syntax (third elements)
+	                   :message "array length must be a non-negative integer"))
+	          (make-instance 'semantic-array-type-syntax :syntax syntax
+	                         :element-type (resolve-type-syntax scope (second elements))
+	                         :length length)))
+	       (t (error 'semantic-error :syntax head-syntax
+	                 :message "unknown type constructor")))))
 	  (t (error 'semantic-error :syntax syntax :message "expected a type")))))
 
 (define-condition expected-type-error (semantic-error)
@@ -843,7 +882,15 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 	 (type-context-pointer-type
 	  type-context
 	  (resolve-type type-context
-			(semantic-pointer-type-syntax-target resolved-type-syntax))))
+		(semantic-pointer-type-syntax-target resolved-type-syntax))))
+	((typep resolved-type-syntax 'semantic-array-type-syntax)
+	 (let ((element-type (resolve-type type-context
+				   (semantic-array-type-syntax-element-type resolved-type-syntax))))
+	   (unless (sized-type-p element-type)
+	     (error 'semantic-error :syntax (semantic-type-syntax-syntax resolved-type-syntax)
+	            :message "array element type must be sized"))
+	   (type-context-array-type type-context element-type
+	                            (semantic-array-type-syntax-length resolved-type-syntax))))
 	(t (error "Unknown resolved type syntax ~S" resolved-type-syntax))))
 
 (defun parse-parameter (function parameter-syntax)
@@ -1053,7 +1100,10 @@ semantic representation."
          ;; Pointer recursion is deferred with all other recursive product
          ;; machinery, even though LLVM could represent some instances.
          (ensure-type-is-complete
-          program (semantic-pointer-type-syntax-target resolved-type-syntax) syntax))))
+          program (semantic-pointer-type-syntax-target resolved-type-syntax) syntax))
+        ((typep resolved-type-syntax 'semantic-array-type-syntax)
+         (ensure-type-is-complete
+          program (semantic-array-type-syntax-element-type resolved-type-syntax) syntax))))
 
 (defun resolve-product-type-declaration (program semantic-declaration)
   (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
@@ -1285,6 +1335,12 @@ type checker."
 (define-condition not-addressable-error (semantic-error) ())
 (define-condition not-writable-error (semantic-error) ())
 (define-condition invalid-expression-error (semantic-error) ())
+(define-condition cannot-infer-array-element-type-error (semantic-error) ()
+  (:default-initargs :message "CannotInferArrayElementType"))
+(define-condition array-element-type-mismatch-error (type-mismatch-error) ()
+  (:default-initargs :message "ArrayElementTypeMismatch"))
+(define-condition array-index-out-of-bounds-error (semantic-error) ()
+  (:default-initargs :message "ArrayIndexOutOfBounds"))
 
 (defun verona-type-name (type)
   "A compact stable spelling used in semantic diagnostics."
@@ -1299,6 +1355,9 @@ type checker."
 	((typep type 'float-type) (format nil "f~D" (float-type-width type)))
 	((typep type 'pointer-type)
 	 (format nil "(pointer ~A)" (verona-type-name (pointer-type-target type))))
+	((typep type 'array-type)
+	 (format nil "(array ~A ~D)" (verona-type-name (array-type-element-type type))
+		 (array-type-length type)))
 	((typep type 'function-type) "function")
 	((typep type 'defined-type)
 	 (verona-name-value (declaration-name (defined-type-declaration type))))
@@ -1307,6 +1366,10 @@ type checker."
 (defun same-type-p (left right)
   "Whether LEFT and RIGHT are the same canonical Verona type."
   (eq left right))
+
+(defun sized-type-p (type)
+  "Whether TYPE can be stored inline in a fixed Verona array."
+  (not (typep type '(or void-type never-type function-type))))
 
 (defun c-abi-value-type-p (type)
   "Whether TYPE is passed or returned as a first-stage C ABI value."
@@ -1455,6 +1518,77 @@ they represent parameter storage rather than C's accidental value category."
                                     for payload-type in payload-types
                                     collect (check-expression argument scope payload-type))
                    :type sum-type)))
+
+(defun infer-array-construct-expression (syntax scope argument-syntax &optional expected-type)
+  "Resolve ARRAY-OF in synthesis mode or against an expected ArrayType."
+  (let ((length (length argument-syntax)))
+    (cond
+      (expected-type
+       (unless (typep expected-type 'array-type)
+         (error 'semantic-error :syntax syntax
+                :message "array-of requires an expected array type"))
+       (unless (= length (array-type-length expected-type))
+         (error 'wrong-argument-count-error :syntax syntax
+                :expected (array-type-length expected-type) :actual length))
+       (make-instance 'array-construct-expression :syntax syntax
+                      :elements (mapcar (lambda (argument)
+                                          (check-expression argument scope
+                                                            (array-type-element-type expected-type)))
+                                        argument-syntax)
+                      :type expected-type))
+      ((zerop length)
+       (error 'cannot-infer-array-element-type-error :syntax syntax))
+      (t
+       (let* ((first (infer-value-expression (first argument-syntax) scope))
+              (element-type (expression-type first))
+              (elements (cons first
+                              (mapcar (lambda (argument)
+                                        (handler-case
+                                            (check-expression argument scope element-type)
+                                          (type-mismatch-error (condition)
+                                            (error 'array-element-type-mismatch-error
+                                                   :syntax argument :actual (type-mismatch-error-actual condition)
+                                                   :expected element-type))))
+                                      (rest argument-syntax))))
+              (type (type-context-array-type (semantic-scope-owning-type-context scope)
+                                             element-type length)))
+         (make-instance 'array-construct-expression :syntax syntax :elements elements :type type))))))
+
+(defun constant-array-index-p (expression)
+  (and (typep expression 'integer-literal) (integer-literal-value expression)))
+
+(defun validate-array-index (syntax array-type index-expression)
+  (let ((constant (constant-array-index-p index-expression)))
+    (when (and constant
+               (or (< constant 0) (>= constant (array-type-length array-type))))
+      (error 'array-index-out-of-bounds-error :syntax syntax
+             :message "array index is out of bounds"))))
+
+(defun infer-index-expression (syntax scope)
+  (let ((arguments (rest (verona-list-elements (syntax-datum syntax)))))
+    (unless (= (length arguments) 2)
+      (error 'invalid-expression-error :syntax syntax
+             :message "index requires an array and index"))
+    (let* ((base (infer-expression (first arguments) scope))
+           (array-type (expression-type base)))
+      (unless (typep array-type 'array-type)
+        (error 'invalid-expression-error :syntax (first arguments)
+               :message "index requires an array"))
+      (let ((index (check-expression
+                    (second arguments) scope
+                    (type-context-integer-type (semantic-scope-owning-type-context scope) nil
+                                               (type-context-pointer-width
+                                                (semantic-scope-owning-type-context scope))))))
+        (validate-array-index (second arguments) array-type index)
+        (if (and (typep base 'place-expression)
+                 (place-expression-addressable-p base))
+            (make-instance 'index-place :syntax syntax :base base :index index
+                           :element-type (array-type-element-type array-type)
+                           :type (array-type-element-type array-type)
+                           :addressable t :writable (place-expression-writable-p base))
+            (make-instance 'index-expression :syntax syntax :base base :index index
+                           :element-type (array-type-element-type array-type)
+                           :type (array-type-element-type array-type)))))))
 
 (defun expected-sum-constructor (syntax expected-type)
   "Resolve a constructor name only in the supplied expected sum type."
@@ -1954,6 +2088,10 @@ therefore visible, while the binding being built cannot see itself."
 	     (let ((special (expression-special-form-name syntax)))
 	       (cond ((and special (string= special "do"))
 		      (infer-sequence-expression syntax scope))
+		     ((and special (string= special "array-of"))
+		      (infer-array-construct-expression syntax scope (rest elements)))
+		     ((and special (string= special "index"))
+		      (infer-index-expression syntax scope))
 		     ((and special (string= special "field"))
 		      (infer-field-expression syntax scope))
 		     ((and special (string= special "let"))
@@ -1993,7 +2131,12 @@ therefore visible, while the binding being built cannot see itself."
   "Analyze SYNTAX with EXPECTED-TYPE, contextually typing numeric literals."
   (check-type expected-type verona-type)
   (let ((datum (syntax-datum syntax)))
-    (cond ((and (verona-list-p datum)
+	(cond ((and (verona-list-p datum)
+		    (expression-special-form-name syntax)
+		    (string= (expression-special-form-name syntax) "array-of"))
+	       (infer-array-construct-expression syntax scope
+					 (rest (verona-list-elements datum)) expected-type))
+	      ((and (verona-list-p datum)
 		(expected-sum-constructor syntax expected-type))
 	   (multiple-value-bind (alternative foundp)
 	       (expected-sum-constructor syntax expected-type)
@@ -2071,6 +2214,10 @@ the primitive model."
 	((typep type 'float-type) (member (float-type-width type) '(32 64)))
 	((typep type 'pointer-type) (or (typep (pointer-type-pointee type) 'void-type)
 				   (backend-representable-type-p (pointer-type-pointee type))))
+	((typep type 'array-type)
+	 (and (integerp (array-type-length type)) (<= 0 (array-type-length type))
+	      (sized-type-p (array-type-element-type type))
+	      (backend-representable-type-p (array-type-element-type type))))
 	((typep type 'function-type)
 	 (and (every #'backend-representable-type-p (function-type-parameters type))
 	      (backend-representable-type-p (function-type-result type))))
@@ -2112,6 +2259,35 @@ the primitive model."
     (backend-validation-fail expression "expression type ~A is not backend representable"
 			     (verona-type-name (expression-type expression))))
   (cond
+    ((typep expression 'array-construct-expression)
+     (let ((type (expression-type expression))
+           (elements (array-construct-expression-elements expression)))
+       (unless (and (typep type 'array-type)
+                    (= (length elements) (array-type-length type)))
+         (backend-validation-fail expression "array construction is incomplete"))
+       (dolist (element elements)
+         (validate-expression-for-backend element)
+         (unless (same-type-p (expression-type element) (array-type-element-type type))
+           (backend-validation-fail expression "array constructor has a non-exact element type")))))
+    ((typep expression 'index-expression)
+     (let ((base (index-expression-base expression))
+           (index (index-expression-index expression)))
+       (validate-expression-for-backend base)
+       (validate-expression-for-backend index)
+       (unless (and (typep (expression-type base) 'array-type)
+                    (same-type-p (expression-type expression)
+                                 (array-type-element-type (expression-type base)))
+                    (same-type-p (index-expression-element-type expression)
+                                 (array-type-element-type (expression-type base)))
+                    (typep (expression-type index) 'integer-type)
+                    (not (integer-type-signed (expression-type index))))
+         (backend-validation-fail expression "array index is not fully typed"))
+       (when (typep expression 'index-place)
+         (unless (and (typep base 'place-expression)
+                      (place-expression-addressable-p base)
+                      (eq (place-expression-writable-p expression)
+                          (place-expression-writable-p base)))
+           (backend-validation-fail expression "array index place does not propagate place properties")))))
     ((typep expression 'construct-expression)
      (let ((product-type (construct-expression-product-type expression))
 	   (values (construct-expression-fields expression)))
@@ -2401,7 +2577,7 @@ the primitive model."
 		   (backend-validation-fail nil "type declaration is incomplete"))))
 	      ((typep declaration 'semantic-constant-declaration)
 	       (let ((initializer (semantic-constant-declaration-initializer declaration)))
-		 (when (typep (semantic-constant-declaration-type declaration) '(or product-type sum-type))
+	       (when (typep (semantic-constant-declaration-type declaration) '(or product-type sum-type array-type))
 		   (backend-validation-fail initializer
 			    "top-level aggregate constants are not supported yet"))
 		 (validate-expression-for-backend initializer)
@@ -2410,7 +2586,7 @@ the primitive model."
 		   (backend-validation-fail initializer "constant initializer is not exactly typed"))))
 	      ((typep declaration 'semantic-variable-declaration)
 	       (let ((initializer (semantic-variable-declaration-initializer declaration)))
-		 (when (typep (semantic-variable-declaration-type declaration) '(or product-type sum-type))
+	       (when (typep (semantic-variable-declaration-type declaration) '(or product-type sum-type array-type))
 		   (backend-validation-fail initializer
 			    "top-level aggregate variables are not supported yet"))
 		 (validate-expression-for-backend initializer)

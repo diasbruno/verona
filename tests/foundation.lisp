@@ -900,6 +900,77 @@
       (is (eq (first fields) (field-expression-field left))))
     (is (eq program (validate-for-backend program)))))
 
+(test resolves-fixed-array-type-identity-and-zero-length-arrays
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(function indexed ((values (array i64 2))) i64 0)"))
+         (program (compilation-unit-semantic-program unit))
+         (indexed (semantic-program-declaration program (first (unit-declarations unit))))
+         (array-type (parameter-binding-type
+                      (first (semantic-function-declaration-parameters indexed))))
+         (context (semantic-program-type-context program)))
+    (is (typep array-type 'verona:array-type))
+    (is (= 2 (verona:array-type-length array-type)))
+    (is (typep (verona:array-type-element-type array-type) 'integer-type))
+    (is (eq array-type
+            (verona:type-context-array-type context
+                                            (verona:array-type-element-type array-type) 2)))
+    (is (not (eq array-type
+                 (verona:type-context-array-type context
+                                                 (verona:array-type-element-type array-type) 3))))
+    (is (typep (verona:type-context-array-type context
+                                                (verona:array-type-element-type array-type) 0)
+               'verona:array-type))
+    (is (eq program (validate-for-backend program)))))
+
+(test contextually-constructs-arrays-in-products-sums-and-nested-results
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(type packet (product (header (array i64 2))))
+                 (type message (sum (small (array i64 2))))
+                 (function from-product () packet (packet (array-of 1 2)))
+                 (function from-sum () message (small (array-of 1 2)))
+                 (function nested () (array (array i64 2) 2)
+                   (array-of (array-of 1 2) (array-of 3 4)))"))
+         (program (compilation-unit-semantic-program unit))
+         (nested (semantic-program-declaration program (nth 4 (unit-declarations unit)))))
+    (is (typep (semantic-function-declaration-body nested)
+               'verona:array-construct-expression))
+    (is (eq program (validate-for-backend program)))))
+
+(test synthesizes-array-types-for-generic-dispatch
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(generic choose (value))
+                 (implementation choose ((value (array i32 2))) i64 42)
+                 (function dispatch () i64 (choose (array-of 1 2)))"))
+         (program (compilation-unit-semantic-program unit))
+         (dispatch (semantic-program-declaration program (third (unit-declarations unit)))))
+    (is (typep (semantic-function-declaration-body dispatch) 'semantic-call))
+    (is (eq program (validate-for-backend program)))))
+
+(test indexes-fixed-arrays-as-places
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(function indexed ((values (array i64 2)) (i usize)) i64
+                    (index values i))"))
+         (program (compilation-unit-semantic-program unit))
+         (indexed (semantic-program-declaration program (first (unit-declarations unit))))
+         (body (semantic-function-declaration-body indexed)))
+    (is (typep body 'load-expression))
+    (is (typep (load-expression-place body) 'verona:index-place))
+    (is (eq program (validate-for-backend program)))))
+
+(test rejects-invalid-fixed-array-construction-and-indexing
+  (signals verona:cannot-infer-array-element-type-error
+    (compile-string (make-compiler) "(function bad () unit (do (array-of) unit))"))
+  (signals verona:array-index-out-of-bounds-error
+    (compile-string (make-compiler)
+                    "(function bad () i32 (index (array-of 1 2) 2))"))
+  (signals error
+    (compile-string (make-compiler)
+                    "(function bad () (array void 1) (array-of unit))")))
+
 (test rejects-invalid-product-definitions-construction-and-fields
   (signals duplicate-field-error
     (compile-string (make-compiler) "(type point ((x i64) (x i64)))"))

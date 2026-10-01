@@ -137,6 +137,21 @@
     (is (search "extractvalue" ir))
     (is (= 42 (compile-and-run-native source)))))
 
+(test lowers-fixed-arrays-indexing-and-runtime-bounds-checks
+  (let* ((source
+           "(function pick ((values (array i64 4)) (i usize)) i64
+               (index values i))
+             (function main () i64
+               (pick (array-of 10 20 30 40) 2))")
+         (unit (compile-string (make-compiler) source))
+         (backend (verona.backend.llvm:generate-llvm
+                   (compilation-unit-semantic-program unit)))
+         (ir (verona.backend.llvm:print-llvm-module backend)))
+    (is (search "[4 x i64]" ir))
+    (is (search "getelementptr [4 x i64]" ir))
+    (is (search "llvm.trap" ir))
+    (is (= 30 (compile-and-run-native source)))))
+
 (test lowers-and-executes-boolean-matches
   (let* ((source (format nil
 			 "(function max ((a i64) (b i64)) i64~%

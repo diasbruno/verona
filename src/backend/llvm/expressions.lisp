@@ -1,5 +1,45 @@
 (in-package #:verona.backend.llvm)
 
+(defun llvm-trap-function (backend)
+  "Return the module-local declaration of LLVM's non-returning trap intrinsic."
+  (or (llvm-backend-trap-function backend)
+      (setf (llvm-backend-trap-function backend)
+            (llvm:add-function
+             (llvm-backend-module backend) "llvm.trap"
+             (llvm:function-type (llvm:void-type :context (llvm-backend-context backend))
+                                 '())))))
+
+(defun emit-checked-array-element-address (backend array-type base-address index-expression)
+  "Branch to llvm.trap when INDEX is outside ARRAY-TYPE, then form its GEP."
+  (let* ((builder (llvm-backend-builder backend))
+         (function (llvm:basic-block-parent (llvm:insertion-block builder)))
+         (access (llvm:append-basic-block function "array.index.ok"
+                                           :context (llvm-backend-context backend)))
+         (failure (llvm:append-basic-block function "array.index.oob"
+                                            :context (llvm-backend-context backend)))
+         (index (emit-value backend index-expression))
+         (index-type (lower-type backend (verona:expression-type index-expression)))
+         (bound (llvm:const-int index-type (verona:array-type-length array-type))))
+    (llvm:build-cond-br builder (llvm:build-i-cmp builder :unsigned-< index bound "array.in.bounds")
+                        access failure)
+    (llvm:position-builder-at-end builder failure)
+    (llvm:build-call builder (llvm-trap-function backend) '())
+    (llvm:build-unreachable builder)
+    (llvm:position-builder-at-end builder access)
+    (llvm:build-gep builder base-address
+                    (list (llvm:const-int (llvm:int-type 32
+                                                          :context (llvm-backend-context backend)) 0)
+                          index)
+                    "array.element" (lower-type backend array-type))))
+
+(defun emit-array-value-address (backend expression)
+  "Materialize an array value only for a dynamic index; LET values stay SSA."
+  (let* ((array-type (verona:expression-type expression))
+         (address (llvm:build-alloca (llvm-backend-builder backend)
+                                     (lower-type backend array-type) "array.value")))
+    (llvm:build-store (llvm-backend-builder backend) (emit-value backend expression) address)
+    address))
+
 (defun emit-place (backend expression)
   "Emit an LLVM address for a semantic Place expression."
   (cond
@@ -11,6 +51,11 @@
        (backend-binding backend binding)))
     ((typep expression 'verona:dereference-expression)
      (emit-value backend (verona:dereference-expression-operand expression)))
+    ((typep expression 'verona:index-place)
+     (emit-checked-array-element-address
+      backend (verona:expression-type (verona:index-expression-base expression))
+      (emit-place backend (verona:index-expression-base expression))
+      (verona:index-expression-index expression)))
     (t (backend-fail "expression ~S is not an LLVM place" expression))))
 
 (defun emit-reference-value (backend expression)
@@ -217,6 +262,22 @@ only job here is to form the CFG and merge non-terminating case values."
        (llvm:build-insert-value (llvm-backend-builder backend) aggregate payload
                                 (1+ (verona:sum-alternative-index alternative))
                                 "sum.payload")))
+    ((typep expression 'verona:array-construct-expression)
+     (let ((aggregate (llvm:undef (lower-type backend (verona:expression-type expression)))))
+       (loop for value-expression in (verona:array-construct-expression-elements expression)
+             for index from 0
+             do (setf aggregate
+                      (llvm:build-insert-value (llvm-backend-builder backend) aggregate
+                                               (emit-value backend value-expression)
+                                               index "array.insert")))
+       aggregate))
+    ((typep expression 'verona:index-expression)
+     (let ((address (emit-checked-array-element-address
+                     backend (verona:expression-type (verona:index-expression-base expression))
+                     (emit-array-value-address backend (verona:index-expression-base expression))
+                     (verona:index-expression-index expression))))
+       (llvm:build-load (llvm-backend-builder backend) address "array.element.value"
+                        (lower-type backend (verona:expression-type expression)))))
     ((typep expression 'verona:field-expression)
      (let ((field (verona:field-expression-field expression)))
        ;; The resolver records ProductField identity and index.  LLVM never

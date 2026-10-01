@@ -27,6 +27,10 @@
                 (if (typep (verona:pointer-type-pointee type) 'verona:void-type)
                     (llvm:int-type 8 :context (llvm-backend-context backend))
                     (lower-type backend (verona:pointer-type-pointee type)))))
+              ((typep type 'verona:array-type)
+               (llvm:array-type
+                (lower-type backend (verona:array-type-element-type type))
+                (verona:array-type-length type)))
               ((typep type 'verona:function-type)
                (llvm:function-type
                 (lower-type backend (verona:function-type-result type))
