@@ -2,6 +2,84 @@
 
 (in-suite :verona)
 
+(test compiler-target-selects-platform-reader-features
+  (let* ((target (verona.compiler:resolve-compilation-target))
+         (platform (verona.compiler:compilation-target-platform target))
+         (unit (verona:compile-string
+                (verona:make-compiler)
+                "#+darwin (function platform-value () unit unit)
+                 #-darwin (function platform-value () i32 0)"
+                :target target))
+         (declaration (first (verona:unit-declarations unit)))
+         (return-type (verona:syntax-datum
+                       (verona:function-declaration-return-type declaration))))
+    (is (= 1 (length (verona:unit-declarations unit))))
+    (if (eq platform :darwin)
+        (is (verona:unit-literal-p return-type))
+        (is (string= "i32" (verona:verona-name-value return-type))))))
+
+(test compiler-target-provides-platform-and-explicit-reader-features
+  (let* ((target (verona.compiler:resolve-compilation-target
+                  :reader-features '("project-switch")))
+         (features (verona:target-feature-names target))
+         (unit (verona:compile-string
+                (verona:make-compiler)
+                "#+project-switch (function enabled () i32 42)
+                 #-project-switch (function enabled () i32 0)"
+                :target target)))
+    (is (member "project-switch" features :test #'string=))
+    (is (member (string-downcase
+                 (symbol-name (verona.compiler:compilation-target-platform target)))
+                features :test #'string=))
+    (is (= 1 (length (verona:unit-declarations unit))))))
+
+(test compiler-target-provides-architecture-layout-and-abi-features
+  (let* ((target (verona.compiler:resolve-compilation-target))
+         (features (verona:target-feature-names target)))
+    (is (member (format nil "pointer_~D"
+                        (verona.compiler:compilation-target-pointer-width target))
+                features :test #'string=))
+    (is (member (string-downcase
+                 (symbol-name (verona.compiler:compilation-target-object-format target)))
+                features :test #'string=))
+    (is (or (member "little_endian" features :test #'string=)
+            (member "big_endian" features :test #'string=)))
+    (is (or (member "x86_64" features :test #'string=)
+            (member "aarch64" features :test #'string=)
+            (member "arm" features :test #'string=)
+            (member "riscv64" features :test #'string=)))))
+
+(test canonicalizes-target-architecture-feature-names
+  (is (string= "x86_64"
+               (verona.compiler::target-architecture-feature "amd64-unknown-linux-gnu")))
+  (is (string= "aarch64"
+               (verona.compiler::target-architecture-feature "arm64-apple-darwin")))
+  (is (string= "arm"
+               (verona.compiler::target-architecture-feature "thumbv7-unknown-linux-gnueabihf")))
+  (is (string= "riscv64"
+               (verona.compiler::target-architecture-feature "riscv64-unknown-linux-musl"))))
+
+(test command-line-feature-enables-reader-conditional
+  (let* ((source (merge-pathnames (format nil "verona-feature-~A.vrn" (gensym "TEST-"))
+                                  (uiop:temporary-directory)))
+         (object (merge-pathnames (format nil "verona-feature-~A.o" (gensym "TEST-"))
+                                  (uiop:temporary-directory))))
+    (unwind-protect
+         (progn
+           (with-open-file (stream source :direction :output :if-exists :supersede)
+             (write-string
+              "#+cli-switch (function selected () i32 42)
+               #-cli-switch (not-a-declaration)"
+              stream))
+           (let ((artifact (verona.compiler:main
+                            (list "compile" (namestring source) "--emit" "object"
+                                  "--output" (namestring object)
+                                  "--feature" "cli-switch"))))
+             (is (typep artifact 'verona.compiler:object-artifact))
+             (is (probe-file object))))
+      (when (probe-file source) (delete-file source))
+      (when (probe-file object) (delete-file object)))))
+
 (test compiler-driver-produces-native-artifacts
   (let* ((source (merge-pathnames (format nil "verona-driver-~A.vrn" (gensym "TEST-"))
                                   (uiop:temporary-directory)))

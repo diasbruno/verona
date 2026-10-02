@@ -232,6 +232,36 @@
   (signals verona-read-error
     (read-source (make-source "invalid.vrn" "."))))
 
+(test includes-enabled-platform-feature-conditionals
+  (let ((forms (read-source
+                (make-source "features.vrn"
+                             (format nil "#+darwin (function a () unit unit)~%#-darwin (function a () i32 0)"))
+                :features '("darwin"))))
+    (is (= 1 (length forms)))
+    (is (unit-literal-p
+         (syntax-datum (fourth (verona-list-elements (syntax-datum (first forms)))))))))
+
+(test includes-negated-unavailable-platform-conditionals
+  (let ((forms (read-source
+                (make-source "features.vrn"
+                             (format nil "#+darwin (function a () unit unit)~%#-darwin (function a () i32 0)"))
+                :features '("linux"))))
+    (is (= 1 (length forms)))
+    (is (string= "i32" (verona-symbol-name
+                          (syntax-datum (fourth (verona-list-elements
+                                                  (syntax-datum (first forms))))))))))
+
+(test applies-platform-feature-conditionals-in-lists
+  (let* ((form (first (read-source (make-source "features.vrn" "(do #+darwin 1 #-darwin 2)")
+                                   :features '("darwin"))))
+         (elements (verona-list-elements (syntax-datum form))))
+    (is (= 2 (length elements)))
+    (is (= 1 (syntax-datum (second elements))))))
+
+(test rejects-feature-conditionals-without-a-name
+  (signals verona-read-error
+    (read-source (make-source "features.vrn" "#+ (function a () unit unit)"))))
+
 (test retains-multiple-source-forms-in-a-compilation-unit
   (let ((module (compile-string
 		 (make-compiler)

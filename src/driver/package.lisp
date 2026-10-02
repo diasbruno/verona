@@ -18,6 +18,7 @@
    #:compilation-target #:resolve-compilation-target
    #:compilation-target-triple #:compilation-target-cpu
    #:compilation-target-features #:compilation-target-data-layout
+   #:compilation-target-reader-features
    #:compilation-target-pointer-width #:compilation-target-object-format
    #:compilation-target-platform
    #:artifact #:artifact-kind #:artifact-path #:artifact-target
@@ -42,10 +43,10 @@
    #:build-file #:build-file-source #:build-file-targets
    #:build-target #:build-target-name #:build-target-root-module
    #:build-target-module-paths #:build-target-compilation-target
-   #:build-target-optimization #:build-target-link-options
+   #:build-target-optimization #:build-target-reader-features #:build-target-link-options
    #:executable-target #:static-library-target #:shared-library-target
    #:build-invocation #:make-build-invocation #:build-invocation-target-name
-   #:build-invocation-output-directory
+   #:build-invocation-output-directory #:build-invocation-reader-features
    #:parse-build-file #:parse-build-source #:find-build-target #:locate-build-file
    #:execute-build #:build-target-artifact-kind
    #:build-error #:build-error-message #:build-error-syntax

@@ -19,8 +19,11 @@
   (let ((location (verona-read-error-location condition)))
     (make-source-range location location)))
 
-(defstruct (reader-state (:constructor make-reader-state (source)))
+(defstruct (reader-state (:constructor make-reader-state (source features)))
   source
+  ;; Feature names are normalized once at the reader boundary.  The syntax
+  ;; itself remains free of host or target-specific reader objects.
+  (features '() :type list)
   (offset 0 :type (integer 0 *))
   (nesting-depth 0 :type (integer 0 *)))
 
@@ -58,6 +61,22 @@
   (or (null character)
       (verona-whitespace-p character)
       (find character "()\"" :test #'char=)))
+
+(defun feature-name-string (feature)
+  "Return FEATURE's case-insensitive external spelling.
+
+Feature conditionals deliberately use a separate namespace from ordinary
+Verona identifiers.  This matches Common Lisp's conventional lower-case
+feature spelling while preserving the language's case-sensitive identifiers."
+  (string-downcase
+   (etypecase feature
+     (string feature)
+     (symbol (symbol-name feature))
+     (verona-name (verona-name-value feature)))))
+
+(defun feature-available-p (state feature)
+  (member (feature-name-string feature) (reader-state-features state)
+          :test #'string=))
 
 (defun skip-whitespace (state)
   (loop while (verona-whitespace-p (reader-peek state))
@@ -181,8 +200,34 @@
                    (when (char= (reader-peek state) #\))
                      (reader-advance state)
                      (return (apply #'make-verona-list (nreverse elements))))
-                   (push (read-form state) elements)))
+                   (multiple-value-bind (form present-p) (read-form state)
+                     (when present-p
+                       (push form elements)))))
     (decf (reader-state-nesting-depth state))))
+
+(defun read-feature-conditional (state start)
+  "Read #+FEATURE FORM or #-FEATURE FORM, returning FORM only when selected."
+  (reader-advance state)
+  (let ((operator (reader-peek state)))
+    (unless (member operator '(#\+ #\-) :test #'char=)
+      (reader-fail state "expected '+' or '-' after '#'" start))
+    (reader-advance state)
+    (let* ((feature-start (reader-state-offset state))
+           (feature (with-output-to-string (output)
+                      (loop for character = (reader-peek state)
+                            until (verona-delimiter-p character)
+                            do (write-char (reader-advance state) output)))))
+      (when (string= feature "")
+        (reader-fail state "expected a feature name after reader conditional" feature-start))
+      ;; Always read the controlled form, including an unselected one.  That
+      ;; keeps delimiters and source-location accounting correct while letting
+      ;; unavailable platform code contain otherwise invalid declarations.
+      (multiple-value-bind (form present-p) (read-form state)
+        (values form
+                (and present-p
+                     (if (char= operator #\+)
+                         (feature-available-p state feature)
+                         (not (feature-available-p state feature)))))))))
 
 (defun read-form (state)
   (skip-whitespace state)
@@ -202,19 +247,27 @@
                            (digit-char-p (char (reader-contents state) (1+ start))))
                       (reader-fail state "floating-point literals must start with a digit")
                       (reader-fail state "'.' is not valid Verona syntax; use `unit`" start)))
+                 ((char= character #\#)
+                  (return-from read-form (read-feature-conditional state start)))
                  (t (read-atom state start)))))
-    (make-instance 'syntax
-                   :datum datum
-                   :source (reader-state-source state)
-                   :start (source-location-at (reader-state-source state) start)
-                   :end (reader-location state))))
+    (values (make-instance 'syntax
+                           :datum datum
+                           :source (reader-state-source state)
+                           :start (source-location-at (reader-state-source state) start)
+                           :end (reader-location state))
+            t)))
 
-(defun read-source (source)
-  "Read every top-level form in SOURCE without interpreting any form head."
+(defun read-source (source &key (features '()))
+  "Read selected forms in SOURCE without interpreting any form head.
+
+FEATURES controls #+FEATURE and #-FEATURE reader conditionals.  Feature
+spelling is case-insensitive; ordinary Verona identifiers remain case-sensitive."
   (check-type source source)
-  (let ((state (make-reader-state source))
+  (let ((state (make-reader-state source (mapcar #'feature-name-string features)))
         (forms '()))
     (loop do (skip-whitespace state)
               (when (reader-at-end-p state)
                 (return (nreverse forms)))
-              (push (read-form state) forms))))
+              (multiple-value-bind (form present-p) (read-form state)
+                (when present-p
+                  (push form forms))))))

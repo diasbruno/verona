@@ -111,6 +111,7 @@
    #:*macro-expansion-depth-limit*
    #:make-bootstrap-environment
    #:read-source
+   #:target-feature-names
    #:*reader-nesting-depth-limit*
    #:compilation-unit
    #:compilation-unit-source
@@ -137,6 +138,7 @@
    #:import-alias
    #:module-loader
    #:module-loader-search-paths
+   #:module-loader-features
    #:module-loader-loaded-modules
    #:module-loader-load
    #:module-graph

@@ -54,6 +54,8 @@
    (compilation-target :initarg :compilation-target
                        :reader build-target-compilation-target)
    (optimization :initarg :optimization :reader build-target-optimization)
+   (reader-features :initarg :reader-features :initform '()
+                    :reader build-target-reader-features)
    (link-options :initarg :link-options :reader build-target-link-options)))
 
 (defclass executable-target (build-target) ())
@@ -63,9 +65,13 @@
 (defclass build-invocation ()
   ((target-name :initarg :target-name :reader build-invocation-target-name)
    (output-directory :initarg :output-directory
-                     :reader build-invocation-output-directory)))
+                     :reader build-invocation-output-directory)
+   ;; Command-line features sit between compiler-provided and package-provided
+   ;; features when this invocation resolves its selected target.
+   (reader-features :initarg :reader-features :initform '()
+                    :reader build-invocation-reader-features)))
 
-(defun make-build-invocation (target-name output-directory)
+(defun make-build-invocation (target-name output-directory &key (reader-features '()))
   (make-instance 'build-invocation
                  :target-name (if (build-name-p target-name)
                                   target-name
@@ -73,7 +79,8 @@
                  :output-directory
                  (uiop:ensure-directory-pathname
                   (uiop:ensure-absolute-pathname (pathname output-directory)
-                                                 (uiop:getcwd)))))
+                                                 (uiop:getcwd)))
+                 :reader-features reader-features))
 
 (defun build-fail (class syntax control &rest arguments)
   (error class :syntax syntax :message (apply #'format nil control arguments)))
@@ -112,10 +119,22 @@
       (build-fail 'build-parse-error syntax "~A requires a string" option))
     datum))
 
+(defun build-feature-names (arguments option)
+  "Read one non-empty FEATURES clause as Verona identifier spellings."
+  (unless arguments
+    (build-fail 'build-parse-error option "features requires at least one feature name"))
+  (mapcar (lambda (argument)
+            (let ((datum (verona:syntax-datum argument)))
+              (unless (verona:verona-name-p datum)
+                (build-fail 'build-parse-error argument
+                            "features requires feature names"))
+              (verona:verona-name-value datum)))
+          arguments))
+
 (defun resolve-build-directory (value directory)
   (uiop:ensure-directory-pathname (merge-pathnames value directory)))
 
-(defun parse-build-option (option directory root target optimization
+(defun parse-build-option (option directory root target optimization reader-features
                            module-paths libraries library-paths frameworks)
   (let* ((elements (build-list-elements option "build option"))
          (head (build-head option "build option"))
@@ -149,6 +168,9 @@
            (unless (and (integerp value) (<= 0 value 3))
              (build-fail 'build-parse-error option "optimize must be an integer from 0 through 3"))
            (setf optimization value)))
+        ((string= head "features")
+         (duplicate-p reader-features "features")
+         (setf reader-features (build-feature-names arguments option)))
         ((string= head "library")
          (push (build-string (one-argument) "library") libraries))
         ((string= head "library-path")
@@ -157,7 +179,8 @@
         ((string= head "framework")
          (push (build-string (one-argument) "framework") frameworks))
         (t (build-fail 'unknown-build-option-error option "unknown build option ~A" head))))
-    (values root target optimization module-paths libraries library-paths frameworks)))
+    (values root target optimization reader-features
+            module-paths libraries library-paths frameworks)))
 
 (defun artifact-target-class (head syntax)
   (cond ((string= head "executable") 'executable-target)
@@ -175,11 +198,12 @@
     (let ((name-datum (verona:syntax-datum (first arguments))))
       (unless (verona:verona-name-p name-datum)
         (build-fail 'build-parse-error (first arguments) "build target name must be a name"))
-      (let ((root nil) (target nil) (optimization nil)
+      (let ((root nil) (target nil) (optimization nil) (reader-features nil)
             (module-paths '()) (libraries '()) (library-paths '()) (frameworks '()))
         (dolist (option (rest arguments))
-          (multiple-value-setq (root target optimization module-paths libraries library-paths frameworks)
-            (parse-build-option option directory root target optimization module-paths
+          (multiple-value-setq (root target optimization reader-features
+                                        module-paths libraries library-paths frameworks)
+            (parse-build-option option directory root target optimization reader-features module-paths
                                 libraries library-paths frameworks)))
         (unless root
           (build-fail 'build-parse-error syntax "~A target ~A requires exactly one root option"
@@ -190,6 +214,7 @@
                        :module-paths (or (nreverse module-paths) (list directory))
                        :compilation-target (or target :native)
                        :optimization (or optimization 0)
+                       :reader-features reader-features
                        :link-options (make-link-options
                                       :libraries (nreverse libraries)
                                       :library-search-paths (nreverse library-paths)
@@ -231,10 +256,13 @@
 (defun llvm-optimization-level (level)
   (ecase level (0 :none) (1 :less) (2 :default) (3 :aggressive)))
 
-(defun resolve-build-target (target)
+(defun resolve-build-target (target &key (reader-features '()))
   (resolve-compilation-target
    :triple (and (stringp (build-target-compilation-target target))
-                (build-target-compilation-target target))))
+                (build-target-compilation-target target))
+   ;; Preserve the public feature layering: compiler features are supplied by
+   ;; RESOLVE-COMPILATION-TARGET, then invocation flags, then package flags.
+   :reader-features (append reader-features (build-target-reader-features target))))
 
 (defun validate-build-target (target compilation-target)
   (when (and (link-options-frameworks (build-target-link-options target))
@@ -262,7 +290,9 @@
       (error 'build-error :message (format nil "unknown build target ~A"
                                            (build-name-value
                                             (build-invocation-target-name invocation)))))
-    (let* ((compilation-target (resolve-build-target target))
+    (let* ((compilation-target
+             (resolve-build-target target
+                                   :reader-features (build-invocation-reader-features invocation)))
            (output-directory (build-invocation-output-directory invocation))
            (kind (build-target-artifact-kind target)))
       (validate-build-target target compilation-target)

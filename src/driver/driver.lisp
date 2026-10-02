@@ -43,10 +43,52 @@
   ((triple :initarg :triple :reader compilation-target-triple)
    (cpu :initarg :cpu :reader compilation-target-cpu)
    (features :initarg :features :reader compilation-target-features)
+   ;; These are Verona source-reader conditions, deliberately separate from
+   ;; LLVM CPU features above.
+   (reader-features :initarg :reader-features :initform '()
+                    :reader compilation-target-reader-features)
    (data-layout :initarg :data-layout :reader compilation-target-data-layout)
    (pointer-width :initarg :pointer-width :reader compilation-target-pointer-width)
    (object-format :initarg :object-format :reader compilation-target-object-format)
    (platform :initarg :platform :reader compilation-target-platform)))
+
+(defun target-architecture-feature (triple)
+  "Return the canonical reader feature for TRIPLE's CPU architecture."
+  (let ((architecture (string-downcase
+                       (subseq triple 0 (or (position #\- triple) (length triple))))))
+    (cond ((member architecture '("x86_64" "amd64") :test #'string=) "x86_64")
+          ((member architecture '("aarch64" "arm64") :test #'string=) "aarch64")
+          ((or (string= architecture "arm")
+               (and (>= (length architecture) 3)
+                    (string= "arm" architecture :end2 3))
+               (and (>= (length architecture) 5)
+                    (string= "thumb" architecture :end2 5)))
+           "arm")
+          ((string= architecture "riscv64") "riscv64")
+          (t nil))))
+
+(defun target-endianness-feature (data-layout)
+  "Read the target byte order from LLVM's canonical data-layout spelling."
+  (when (> (length data-layout) 0)
+    (case (char data-layout 0)
+      (#\e "little_endian")
+      (#\E "big_endian"))))
+
+(defmethod verona:target-feature-names ((target compilation-target))
+  ;; Feature composition is ordered and append-only.  Compiler-provided
+  ;; target facts come first, then explicit command-line/package flags.
+  (let ((platform (compilation-target-platform target)))
+    (append (and platform (list (string-downcase (symbol-name platform))))
+            (let ((architecture (target-architecture-feature
+                                 (compilation-target-triple target))))
+              (and architecture (list architecture)))
+            (list (format nil "pointer_~D" (compilation-target-pointer-width target)))
+            (let ((endianness (target-endianness-feature
+                               (compilation-target-data-layout target))))
+              (and endianness (list endianness)))
+            (list (string-downcase (symbol-name (compilation-target-object-format target))))
+            (mapcar #'verona::feature-name-string
+                    (compilation-target-reader-features target)))))
 
 (defun target-platform (triple)
   (cond ((search "darwin" triple :test #'char-equal) :darwin)
@@ -57,11 +99,13 @@
 (defun target-object-format (platform)
   (ecase platform (:darwin :macho) (:linux :elf)))
 
-(defun resolve-compilation-target (&key triple (cpu "generic") (features ""))
+(defun resolve-compilation-target (&key triple (cpu "generic") (features "")
+                                        (reader-features '()))
   "Resolve NATIVE or an explicit triple once, before semantic analysis.
 
 The LLVM target machine is the authority for data layout and pointer width;
-neither value is taken from the Common Lisp host."
+neither value is taken from the Common Lisp host.  READER-FEATURES adds
+explicit #+/#- conditions without changing LLVM's CPU FEATURES."
   (let* ((triple (or triple (native-target-triple)))
          (platform (target-platform triple)))
     (unless platform
@@ -73,6 +117,7 @@ neither value is taken from the Common Lisp host."
                          (make-target-configuration :triple triple :cpu cpu :features features)))
                (width (llvm-backend-pointer-width backend)))
           (make-instance 'compilation-target :triple triple :cpu cpu :features features
+                         :reader-features reader-features
                          :data-layout (llvm-backend-data-layout backend)
                          :pointer-width width :platform platform
                          :object-format (target-object-format platform)))

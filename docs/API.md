@@ -28,6 +28,7 @@ artifact path.
 | `--target TRIPLE` | Compile for an LLVM target triple. |
 | `--cpu CPU` | Select the target CPU; defaults to `generic`. |
 | `--features FEATURES` | Pass the LLVM target-feature string. |
+| `--feature NAME` | Enable a Verona reader feature for this compile or build invocation. Repeatable. |
 | `-l NAME`, `--library NAME` | Link a native library as `-lNAME`. Repeatable. |
 | `-L PATH`, `--library-path PATH` | Add a native library search path. Repeatable. |
 | `--framework NAME` | Link a Darwin framework. Repeatable; rejected on non-Darwin targets. |
@@ -90,6 +91,27 @@ nominal type is required.
 Macros may return one syntax object or a top-level sequence of definitions.
 Imports, exports, and native exports are only valid at the top level.
 
+### Platform feature conditionals
+
+Prefix one form with `#+name` to include it when `name` is available, or with
+`#-name` to include it when it is unavailable.  The reader still consumes
+unselected forms, but they do not reach macro expansion or semantic analysis.
+Feature names are case-insensitive.  Native compilation derives `darwin` or
+`linux` from the selected target triple, so this works correctly for
+cross-target compilation as well as the host target.  It also provides the
+selected target's architecture (`x86_64`, `aarch64`, `arm`, or `riscv64`),
+pointer width (`pointer_32` or `pointer_64`), endianness (`little_endian` or
+`big_endian`), and object format (`macho` or `elf`).  Add project-specific conditions with
+`verona compile --feature NAME`; repeat `--feature` for more than one.
+
+```lisp
+#+darwin
+(external-function mach-task-self "mach_task_self" () u32)
+
+#-darwin
+(function mach-task-self () u32 0)
+```
+
 ### Expressions and callable operations
 
 | Form or function | Signature / behavior |
@@ -128,7 +150,7 @@ compiler tests and generated code, not typical `.vrn` programs:
 | `source-from-file pathname` | Read a file into a source object; signals `source-error` on I/O failure. |
 | `make-syntax datum source start end` | Create a source-spanned syntax object. |
 | `syntax-with-datum syntax datum` | Copy `syntax`'s source span while replacing its datum. |
-| `read-source source` | Parse every form in a source, returning source-aware syntax objects. |
+| `read-source source &key features` | Parse selected forms in a source, returning source-aware syntax objects. `features` controls `#+`/`#-` conditionals. |
 | `make-verona-name value` | Make a case-sensitive identifier. |
 | `verona-name= left right` | Compare two identifiers by exact spelling. |
 | `make-module-name &rest components` | Make a non-empty dotted module identity from Verona names. |
@@ -172,6 +194,7 @@ their associated objects.
 | Function | Description |
 | --- | --- |
 | `make-compiler &key search-paths` | Create a front end. Search paths are used by `compile-file` and `compile-module`. |
+| `target-feature-names target` | Return source-reader features for a target: platform, architecture, data layout, object format, and explicit reader features. |
 | `compile-string compiler contents &key name target pointer-width` | Compile in-memory source into a compilation unit. |
 | `compile-file compiler pathname &key target pointer-width` | Compile a root `.vrn` file and its imports. |
 | `compile-module compiler name &key target pointer-width` | Find and compile a named module from the compiler search paths. |
@@ -293,7 +316,7 @@ Backend configuration/readback accessors are `llvm-backend-context`,
 
 | Function | Description |
 | --- | --- |
-| `resolve-compilation-target &key triple cpu features` | Resolve LLVM target data, pointer width, platform, and object format before front-end analysis. |
+| `resolve-compilation-target &key triple cpu features reader-features` | Resolve LLVM target data, pointer width, platform, object format, and optional explicit Verona reader features before front-end analysis. |
 | `make-link-options &key libraries library-search-paths frameworks` | Build native linker options. |
 | `make-native-toolchain &key compiler archiver` | Create the default linker/archiver adapter. Defaults read `VERONA_LINKER` and `VERONA_AR`. |
 | `make-compiler-driver &key search-paths target optimization-level toolchain` | Configure a reusable native compiler driver. |
@@ -309,6 +332,7 @@ Driver accessors are `compiler-driver-search-paths`, `compiler-driver-target`,
 `compiler-driver-optimization-level`, `compiler-driver-toolchain`,
 `compilation-target-triple`, `compilation-target-cpu`,
 `compilation-target-features`, `compilation-target-data-layout`,
+`compilation-target-reader-features`,
 `compilation-target-pointer-width`, `compilation-target-object-format`,
 `compilation-target-platform`, `artifact-kind`, `artifact-path`,
 `artifact-target`, `link-options-libraries`, `link-options-library-search-paths`,
@@ -320,7 +344,18 @@ and `link-options-frameworks`.
 or `(shared-library NAME ...)` target. Every target needs exactly one
 `(root module.name)`. Optional clauses are `(module-path "PATH")`,
 `(target native)` or `(target "TRIPLE")`, `(optimize 0|1|2|3)`,
-`(library "NAME")`, `(library-path "PATH")`, and `(framework "NAME")`.
+`(features NAME...)`, `(library "NAME")`, `(library-path "PATH")`, and
+`(framework "NAME")`.  `features` may appear once per target and supplies
+reader conditions to that target and all of its imported Verona modules.
+The combined feature list is append-only: compiler-provided features come
+first, then `verona build … --feature NAME` flags, then this target's
+`features` clause.
+
+```lisp
+(executable app
+  (root app.main)
+  (features sqlite telemetry))
+```
 
 | Function | Description |
 | --- | --- |

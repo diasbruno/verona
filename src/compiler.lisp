@@ -11,6 +11,25 @@
   (make-instance 'compiler :search-paths (mapcar #'pathname search-paths)
                  :phase-timing-p phase-timing-p))
 
+(defgeneric target-feature-names (target)
+  (:documentation "Return the source-reader features available for TARGET.
+
+Backends specialize this protocol for their target representation.  The
+front-end knows only feature names, avoiding a dependency on a native backend."))
+
+(defun host-target-feature-names ()
+  "Return source-reader platform features for an implicit native target."
+  (cond ((string-equal (software-type) "Darwin") '("darwin"))
+        ((string-equal (software-type) "Linux") '("linux"))
+        (t '())))
+
+(defmethod target-feature-names ((target null))
+  (host-target-feature-names))
+
+(defmethod target-feature-names ((target t))
+  (declare (ignore target))
+  '())
+
 (defun clear-compiler-phase-timings (compiler)
   (setf (compiler-phase-timings compiler) '()) compiler)
 
@@ -84,6 +103,7 @@
 
 (defclass module-loader ()
   ((search-paths :initarg :search-paths :reader module-loader-search-paths)
+   (features :initarg :features :initform '() :reader module-loader-features)
    (loaded-modules :initform '() :accessor module-loader-loaded-modules)
    (loading-stack :initform '() :accessor module-loader-loading-stack)))
 
@@ -725,7 +745,9 @@ with a Verona module EXPORT."
           (unless path (error 'module-not-found :module name))
           (let* ((source (source-from-file path))
                  (module (make-instance 'module :name name :pathname path
-                                         :source source :forms (read-source source)
+                                         :source source
+                                         :forms (read-source source
+                                                             :features (module-loader-features loader))
                                          :environment (make-compilation-environment))))
             ;; Cache before collecting dependencies: identity is stable even
             ;; while its declaration namespace is being assembled.
@@ -740,14 +762,17 @@ with a Verona module EXPORT."
 
 (defun compile-source (source &key target (pointer-width 64) compiler)
   (let* ((name (make-module-name (make-verona-name "string")))
+         (features (target-feature-names target))
          (module (make-instance 'module :name name :identity-explicit-p nil
                                 :source source
                                 :forms (call-with-compiler-phase compiler :read
-                                                                 (lambda () (read-source source)))
+                                                                 (lambda () (read-source source :features features)))
                                 :environment (make-compilation-environment))))
     (call-with-compiler-phase compiler :declarations
                               (lambda () (collect-module module
-                                                         (make-instance 'module-loader :search-paths '()))))
+                                                         (make-instance 'module-loader
+                                                                        :search-paths '()
+                                                                        :features features))))
     (call-with-compiler-phase compiler :resolve-and-typecheck
                               (lambda () (resolve-program module (list module)
                                                         :target target :pointer-width pointer-width)))
@@ -757,11 +782,12 @@ with a Verona module EXPORT."
 ;; These deliberately return the real phase products, rather than debug
 ;; strings, so SBCL's inspector remains useful while evolving the compiler.
 
-(defun read-verona (source-or-contents &key (name "<string>"))
+(defun read-verona (source-or-contents &key (name "<string>") target)
   "Read Verona source without macro expansion or semantic analysis."
   (read-source (if (typep source-or-contents 'source)
                    source-or-contents
-                   (make-source name source-or-contents))))
+                   (make-source name source-or-contents))
+               :features (target-feature-names target)))
 
 (defun macroexpand-verona (syntax-or-contents &key (name "<string>") environment)
   "Expand a top-level Verona form and retain expansion provenance."
@@ -800,7 +826,8 @@ with a Verona module EXPORT."
          (loader (make-instance 'module-loader
                                 :search-paths
                                 (cons (make-pathname :name nil :type nil :defaults path)
-                                      (compiler-search-paths compiler))))
+                                      (compiler-search-paths compiler))
+                                :features (target-feature-names target)))
          (entry (call-with-compiler-phase compiler :read-and-declarations
                                           (lambda () (module-loader-load loader entry-name))))
          ;; Recursive loading pushes a dependency after its importer has been
@@ -820,7 +847,8 @@ with a Verona module EXPORT."
                            (make-syntax (make-verona-name name)
                                         (make-source "<module>" "")
                                         (make-source-location) (make-source-location)))))
-         (loader (make-instance 'module-loader :search-paths (compiler-search-paths compiler)))
+         (loader (make-instance 'module-loader :search-paths (compiler-search-paths compiler)
+                                :features (target-feature-names target)))
          (entry (call-with-compiler-phase compiler :read-and-declarations
                                           (lambda () (module-loader-load loader module-name))))
          (modules (mapcar #'cdr (module-loader-loaded-modules loader))))
