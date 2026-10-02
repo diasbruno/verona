@@ -40,6 +40,10 @@
 (defclass defined-type (verona-type)
   ((declaration :initarg :declaration :reader defined-type-declaration)))
 
+;; Opaque types name values owned by another ABI.  They intentionally have no
+;; Verona layout and can therefore be used only behind a pointer.
+(defclass opaque-type (defined-type) ())
+
 ;; Type parameters are semantic identities.  They are intentionally types in
 ;; their own right rather than source names, which keeps independently bound
 ;; `a`s distinct and makes substitution structural instead of textual.
@@ -192,6 +196,13 @@ the semantic type of a unit expression remains UnitType."
   "Return DECLARATION's nominal type, creating its identity at most once."
   (or (cdr (assoc declaration (type-context-defined-types context) :test #'eq))
       (let ((type (make-instance 'defined-type :declaration declaration)))
+	(push (cons declaration type) (type-context-defined-types context))
+	type)))
+
+(defun type-context-opaque-type (context declaration)
+  "Return DECLARATION's nominal incomplete type, creating it at most once."
+  (or (cdr (assoc declaration (type-context-defined-types context) :test #'eq))
+      (let ((type (make-instance 'opaque-type :declaration declaration)))
 	(push (cons declaration type) (type-context-defined-types context))
 	type)))
 
@@ -1007,7 +1018,9 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
                              :syntax (semantic-expression-syntax resolved-type-syntax)
                              :message "type alias has not been resolved")))
 		 ((typep binding 'type-declaration)
-		  (type-context-defined-type type-context binding))
+		  (if (eq (type-declaration-kind binding) :opaque)
+		      (type-context-opaque-type type-context binding)
+		      (type-context-defined-type type-context binding)))
 		 (t (error 'expected-type-error
 			   :syntax (semantic-expression-syntax resolved-type-syntax)
 			   :binding binding)))))
@@ -1516,10 +1529,13 @@ shape, so accepting field-list shorthand would make declarations ambiguous."
                       (error 'recursive-type-not-supported-error :syntax syntax
                              :message "RecursiveTypeNotSupported: type members may reference only earlier complete types")))))))
         ((typep resolved-type-syntax 'semantic-pointer-type-syntax)
-         ;; Pointer recursion is deferred with all other recursive product
-         ;; machinery, even though LLVM could represent some instances.
-         (ensure-type-is-complete
-          program (semantic-pointer-type-syntax-target resolved-type-syntax) syntax seen-aliases))
+         ;; A pointer to an opaque C handle needs no pointee layout.  Other
+         ;; pointers retain the existing recursive-layout restriction.
+         (let ((pointee (semantic-pointer-type-syntax-target resolved-type-syntax)))
+           (unless (typep (resolve-type (semantic-program-type-context program)
+                                         pointee program)
+                          'opaque-type)
+             (ensure-type-is-complete program pointee syntax seen-aliases))))
         ((typep resolved-type-syntax 'semantic-array-type-syntax)
          (ensure-type-is-complete
           program (semantic-array-type-syntax-element-type resolved-type-syntax) syntax seen-aliases))))
@@ -1550,6 +1566,12 @@ shape, so accepting field-list shorthand would make declarations ambiguous."
     (setf (semantic-type-declaration-fields semantic-declaration) fields
           (semantic-type-declaration-type semantic-declaration)
           (type-context-product-type context declaration fields))))
+
+(defun resolve-opaque-type-declaration (program semantic-declaration)
+  "Install the identity of a body-less nominal type without inventing a layout."
+  (let ((declaration (semantic-declaration-source-declaration semantic-declaration)))
+    (setf (semantic-type-declaration-type semantic-declaration)
+          (type-context-opaque-type (semantic-program-type-context program) declaration))))
 
 (defun sum-alternative-syntaxes (declaration)
   (let ((body (type-declaration-body declaration)))
@@ -1645,18 +1667,27 @@ shape, so accepting field-list shorthand would make declarations ambiguous."
       ((typep semantic-declaration 'semantic-function-declaration)
        (let ((parameter-types
 	       (mapcar (lambda (parameter)
-			 (setf (parameter-binding-type parameter)
-			       (resolve-type context
-					     (parameter-binding-type-reference parameter))))
+		 (setf (parameter-binding-type parameter)
+		       (resolve-type context
+			     (parameter-binding-type-reference parameter))))
 		       (semantic-function-declaration-parameters semantic-declaration))))
+	 (loop for parameter in (semantic-function-declaration-parameters semantic-declaration)
+	       for type in parameter-types
+	       do (ensure-not-opaque-value-type type (parameter-binding-syntax parameter)
+	                                        "function parameter"))
 	 (setf (semantic-function-declaration-return-type semantic-declaration)
 	       (resolve-type context
-			     (semantic-function-declaration-return-type-reference
-			      semantic-declaration))
+		     (semantic-function-declaration-return-type-reference
+		      semantic-declaration))
 	       (semantic-function-declaration-type semantic-declaration)
 	       (type-context-function-type
 		context parameter-types
-		(semantic-function-declaration-return-type semantic-declaration)))))
+		(semantic-function-declaration-return-type semantic-declaration)))
+	 (ensure-not-opaque-value-type
+	  (semantic-function-declaration-return-type semantic-declaration)
+	  (function-declaration-return-type
+	   (semantic-declaration-source-declaration semantic-declaration))
+	  "function result")))
 	  ((typep semantic-declaration 'semantic-external-function-declaration)
 	   (let ((parameter-types
 		   (mapcar (lambda (reference) (resolve-type context reference))
@@ -1680,6 +1711,10 @@ shape, so accepting field-list shorthand would make declarations ambiguous."
                                (resolve-type context
                                              (parameter-binding-type-reference parameter))))
                        (generic-implementation-parameters semantic-declaration))))
+         (loop for parameter in (generic-implementation-parameters semantic-declaration)
+               for type in parameter-types
+               do (ensure-not-opaque-value-type type (parameter-binding-syntax parameter)
+                                                "generic implementation parameter"))
          (setf (generic-implementation-parameter-types semantic-declaration) parameter-types
                (generic-implementation-result-type semantic-declaration)
                (resolve-type context
@@ -1688,6 +1723,10 @@ shape, so accepting field-list shorthand would make declarations ambiguous."
                (semantic-generic-implementation-type semantic-declaration)
                (type-context-function-type context parameter-types
                                            (generic-implementation-result-type semantic-declaration)))
+         (ensure-not-opaque-value-type
+          (generic-implementation-result-type semantic-declaration)
+          (generic-implementation-declaration semantic-declaration)
+          "generic implementation result")
          (generic-add-implementation (generic-implementation-generic semantic-declaration)
                                      semantic-declaration
                                      (declaration-source
@@ -1695,13 +1734,21 @@ shape, so accepting field-list shorthand would make declarations ambiguous."
       ((typep semantic-declaration 'semantic-constant-declaration)
        (setf (semantic-constant-declaration-type semantic-declaration)
 	     (resolve-type context
-			   (semantic-constant-declaration-type-reference
-			    semantic-declaration))))
+		   (semantic-constant-declaration-type-reference
+		    semantic-declaration)))
+       (ensure-not-opaque-value-type
+        (semantic-constant-declaration-type semantic-declaration)
+        (constant-declaration-type (semantic-declaration-source-declaration semantic-declaration))
+        "constant declaration"))
       ((typep semantic-declaration 'semantic-variable-declaration)
        (setf (semantic-variable-declaration-type semantic-declaration)
 	     (resolve-type context
-			   (semantic-variable-declaration-type-reference
-			    semantic-declaration)))))))
+		   (semantic-variable-declaration-type-reference
+		    semantic-declaration)))
+       (ensure-not-opaque-value-type
+        (semantic-variable-declaration-type semantic-declaration)
+        (variable-declaration-type (semantic-declaration-source-declaration semantic-declaration))
+        "variable declaration")))))
 
 (defun resolve-types (program)
   "Run the type representation/resolution stage for PROGRAM.
@@ -1725,7 +1772,8 @@ type checker."
         (ecase (type-declaration-kind
                 (semantic-declaration-source-declaration declaration))
           (:product (resolve-product-type-declaration program declaration))
-          (:sum (resolve-sum-type-declaration program declaration))))))
+          (:sum (resolve-sum-type-declaration program declaration))
+          (:opaque (resolve-opaque-type-declaration program declaration))))))
   ;; Now all nominal layouts exist, so an alias to one receives its complete
   ;; canonical ProductType or SumType rather than a provisional DefinedType.
   (dolist (entry (semantic-program-declarations program))
@@ -1949,7 +1997,15 @@ recursive call can refer to the same concrete LLVM function."
 
 (defun sized-type-p (type)
   "Whether TYPE can be stored inline in a fixed Verona array."
-  (not (typep type '(or void-type never-type function-type))))
+  (not (typep type '(or void-type never-type function-type opaque-type))))
+
+(defun ensure-not-opaque-value-type (type syntax context)
+  "Reject an opaque type wherever Verona would need its inline representation."
+  (when (typep type 'opaque-type)
+    (error 'semantic-error :syntax syntax
+           :message (format nil "~A cannot use opaque type ~A by value"
+                            context (verona-type-name type))))
+  type)
 
 (defun c-abi-value-type-p (type)
   "Whether TYPE is passed or returned as a first-stage C ABI value."
@@ -2716,9 +2772,9 @@ therefore visible, while the binding being built cannot see itself."
       (unless (typep operand-type 'pointer-type)
 	(error 'invalid-expression-error :syntax (first arguments)
 					 :message "dereference requires a pointer"))
-      (when (typep (pointer-type-pointee operand-type) 'void-type)
+      (when (typep (pointer-type-pointee operand-type) '(or void-type opaque-type))
 	(error 'invalid-expression-error :syntax (first arguments)
-					 :message "cannot dereference (pointer void)"))
+					 :message "cannot dereference a pointer to an incomplete type"))
       (make-instance 'dereference-expression :syntax syntax :operand operand
 					     :type (pointer-type-target operand-type)
 			     :addressable t :writable t))))
@@ -3287,24 +3343,27 @@ the primitive model."
                    (backend-validation-fail body "generic implementation result is not exactly typed"))))
 	      ((typep declaration 'semantic-type-declaration)
 	       (let ((type (semantic-type-declaration-type declaration)))
-		 (unless (and (typep type '(or product-type sum-type))
-			      (eq (defined-type-declaration type)
-				  (semantic-declaration-source-declaration declaration))
-			      (if (typep type 'product-type)
-				  (loop for field in (product-type-fields type)
-					for index from 0
-					always (and (typep field 'product-field)
-						    (typep (product-field-name field) 'verona-name)
-						    (= (product-field-index field) index)
-						    (backend-representable-type-p (product-field-type field))))
-				  (loop for alternative in (sum-type-alternatives type)
-					for index from 0
-					always (and (typep alternative 'sum-alternative)
-						    (eq (sum-alternative-sum-type alternative) type)
-						    (typep (sum-alternative-name alternative) 'verona-name)
-						    (= (sum-alternative-index alternative) index)
-						    (every #'backend-representable-type-p
-							   (sum-alternative-payload-types alternative))))))
+		 (unless (or (and (typep type 'opaque-type)
+				  (eq (defined-type-declaration type)
+				      (semantic-declaration-source-declaration declaration)))
+			     (and (typep type '(or product-type sum-type))
+				  (eq (defined-type-declaration type)
+				      (semantic-declaration-source-declaration declaration))
+				  (if (typep type 'product-type)
+				      (loop for field in (product-type-fields type)
+					    for index from 0
+					    always (and (typep field 'product-field)
+							(typep (product-field-name field) 'verona-name)
+							(= (product-field-index field) index)
+							(backend-representable-type-p (product-field-type field))))
+				      (loop for alternative in (sum-type-alternatives type)
+					    for index from 0
+					    always (and (typep alternative 'sum-alternative)
+							(eq (sum-alternative-sum-type alternative) type)
+							(typep (sum-alternative-name alternative) 'verona-name)
+							(= (sum-alternative-index alternative) index)
+							(every #'backend-representable-type-p
+							       (sum-alternative-payload-types alternative)))))))
 		   (backend-validation-fail nil "type declaration is incomplete"))))
 	      ((typep declaration 'semantic-constant-declaration)
 	       (let ((initializer (semantic-constant-declaration-initializer declaration)))

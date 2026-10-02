@@ -49,9 +49,13 @@ linker or archiver.
 | Floating point | `f32` and `f64`. |
 | `string` | String type. |
 | `void` | C ABI-only no-value result type; it is not a Verona value type. |
-| `(pointer TYPE)` | Pointer type. Pointers to `void` cannot be dereferenced. |
+| `(pointer TYPE)` | Pointer type. Pointers to `void` or an opaque type cannot be dereferenced. |
 | `(function (TYPE...) RESULT)` | Function type syntax. |
 
+`(type Name)` declares a nominal opaque type: it has no Verona layout and is
+valid only as the pointee of a pointer, which is appropriate for a C handle.
+Platform bindings must use a concrete product type only when that target's C
+layout is known and tested; otherwise they must expose an opaque handle.
 Type aliases use `(type Name Type)`, for example `(type UserId i64)`. Product
 types use `(type Name (product (field Type) ...))`; sum types use
 `(type Name (sum (case Type...) ...))`; a zero-payload case is written
@@ -67,6 +71,7 @@ nominal type is required.
 | Form | Purpose |
 | --- | --- |
 | `(type NAME TYPE)` | Define a transparent type alias. |
+| `(type NAME)` | Define a nominal opaque type, usable only behind a pointer. |
 | `(type NAME (product FIELD...))` | Define a nominal product type. |
 | `(type NAME (sum CASE...))` | Define a nominal sum type. |
 | `(function NAME ((parameter TYPE) ...) RESULT BODY)` | Define a function. |
@@ -94,7 +99,7 @@ Imports, exports, and native exports are only valid at the top level.
 | `(return value)` | Return from the enclosing function. |
 | `(do expression...)` | Evaluate expressions in order and return the last value. |
 | `(& place)`, `(address-of place)` | Create a pointer to an addressable place. |
-| `(deref pointer)`, `(dereference pointer)` | Turn a non-void pointer into a place. |
+| `(deref pointer)`, `(dereference pointer)` | Turn a pointer to a complete type into a place. |
 | `(load place)` | Read a place. |
 | `(assign place value)`, `(store place value)` | Write a writable place. |
 | `(cast Type value)` | Explicit pointer cast. |
@@ -234,13 +239,14 @@ are `type-context-unit-type`, `type-context-void-type`, `type-context-never-type
 `type-context-string-type`, `type-context-integer-type`,
 `type-context-float-type`, `type-context-pointer-type`,
 `type-context-function-type`, `type-context-defined-type`,
-`type-context-product-type`, and `type-context-sum-type`.
+`type-context-opaque-type`, `type-context-product-type`, and
+`type-context-sum-type`.
 `unit-machine-representation` returns the target-sized unit representation.
 
 Type accessors are `integer-type-signed`, `integer-type-width`,
 `float-type-width`, `pointer-type-target`, `pointer-type-pointee`,
 `function-type-parameters`, `function-type-result`,
-`defined-type-declaration`, `product-type-fields`, `product-type-find-field`,
+`defined-type-declaration` (including `opaque-type`), `product-type-fields`, `product-type-find-field`,
 `product-field-name`, `product-field-type`, `product-field-index`,
 `product-field-source`, `sum-type-alternatives`, `sum-type-find-alternative`,
 `sum-alternative-sum-type`, `sum-alternative-name`, `sum-alternative-index`,

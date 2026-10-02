@@ -20,7 +20,7 @@
 		#:environment-child #:environment-lookup #:unbound-name-error
 		#:evaluate #:expand #:unit-literal-p
 		#:declaration-name #:declaration-source #:declaration-expanded-syntax #:declaration-module
-		#:type-declaration #:type-declaration-body #:type-alias-declaration
+		#:type-declaration #:type-declaration-kind #:type-declaration-body #:type-alias-declaration
 		#:type-alias-declaration-target
 		#:function-declaration #:function-declaration-parameters
 		#:function-declaration-return-type #:function-declaration-body
@@ -73,7 +73,7 @@
 		#:function-type #:function-type-parameters #:function-type-result
 		#:make-type-context #:type-context-unit-type #:type-context-unit-value
 		#:type-context-unit-representation-type #:unit-machine-representation
-		#:defined-type #:defined-type-declaration #:product-type #:product-type-fields
+		#:defined-type #:defined-type-declaration #:opaque-type #:product-type #:product-type-fields
 		#:product-field #:product-field-name #:product-field-type #:product-field-index
 		#:construct-expression #:construct-expression-product-type #:construct-expression-fields
 		#:sum-type #:sum-type-alternatives #:sum-alternative #:sum-alternative-name
@@ -131,6 +131,62 @@
        (function main () i32
          (let ((memory (pointer void) (allocate 1)))
            (load (deref memory))))")))
+
+(test models-nominal-opaque-types-for-c-handles
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(type file-stream)
+                 (type directory-stream)
+                 (type stream-holder (product (stream (pointer file-stream))))
+                 (external-function open-stream \"fopen\" ((pointer i8) (pointer i8)) (pointer file-stream))
+                 (external-function close-stream \"fclose\" ((pointer file-stream)) i32)"))
+         (program (compilation-unit-semantic-program unit))
+         (file-declaration (first (unit-declarations unit)))
+         (directory-declaration (second (unit-declarations unit)))
+         (holder-declaration (third (unit-declarations unit)))
+         (file-type (semantic-type-declaration-type
+                     (semantic-program-declaration program file-declaration)))
+         (directory-type (semantic-type-declaration-type
+                          (semantic-program-declaration program directory-declaration)))
+         (holder-type (semantic-type-declaration-type
+                       (semantic-program-declaration program holder-declaration))))
+    (is (eq :opaque (type-declaration-kind file-declaration)))
+    (is (null (type-declaration-body file-declaration)))
+    (is (typep file-type 'opaque-type))
+    (is (typep directory-type 'opaque-type))
+    (is (not (eq file-type directory-type)))
+    ;; An inline pointer is sized even though its target is not.
+    (is (typep (product-field-type (first (product-type-fields holder-type)))
+               'pointer-type))
+    (is (eq program (validate-for-backend program)))))
+
+(test rejects-opaque-types-as-inline-values
+  (signals verona:semantic-error
+    (compile-string (make-compiler)
+                    "(type handle) (function invalid ((value handle)) i32 0)"))
+  (signals verona:semantic-error
+    (compile-string (make-compiler)
+                    "(type handle) (function invalid () handle unit)"))
+  (signals verona:semantic-error
+    (compile-string (make-compiler)
+                    "(type handle) (type invalid (product (value handle)))"))
+  (signals verona:semantic-error
+    (compile-string (make-compiler)
+                    "(type handle) (function invalid ((values (array handle 1))) i32 0)"))
+  (signals verona:invalid-expression-error
+    (compile-string
+     (make-compiler)
+     "(type handle)
+      (external-function acquire \"acquire\" () (pointer handle))
+      (function invalid () i32 (load (deref (acquire))))")))
+
+(test keeps-void-aliases-transparent
+  (let* ((unit (compile-string (make-compiler) "(type legacy-handle void)"))
+         (declaration (first (unit-declarations unit)))
+         (program (compilation-unit-semantic-program unit))
+         (semantic (semantic-program-declaration program declaration)))
+    (is (typep declaration 'type-alias-declaration))
+    (is (typep (semantic-type-alias-declaration-target-type semantic) 'verona:void-type))))
 
 (test maps-external-void-results-to-unit-at-the-call-boundary
   (let* ((unit (compile-string

@@ -19,6 +19,26 @@
       (when (probe-file executable)
         (delete-file executable)))))
 
+(defun compile-and-run-native-with-link-arguments (source arguments)
+  (let* ((executable (native-test-path "program"))
+         (unit (compile-string (make-compiler) source))
+         (program (compilation-unit-semantic-program unit))
+         (configuration
+           (verona.backend.llvm:make-codegen-configuration
+            :output-kind :executable
+            :linker (verona.backend.llvm:make-linker-configuration :arguments arguments))))
+    (unwind-protect
+         (progn
+           (verona.backend.llvm:build-executable program executable :configuration configuration)
+           (nth-value 2 (uiop:run-program (list (namestring executable))
+                                           :output :string :error-output :string
+                                           :ignore-error-status t)))
+      (when (probe-file executable)
+        (delete-file executable)))))
+
+(defun native-c-fixture (name)
+  (merge-pathnames name (asdf:system-source-directory :verona)))
+
 (test creates-and-prints-an-empty-llvm-module
   (let ((backend (verona.backend.llvm:make-llvm-backend :module-name "empty")))
     (is (search "ModuleID = 'empty'" (verona.backend.llvm:print-llvm-module backend)))
@@ -103,6 +123,32 @@
     (is (search "declare void @free(" ir))
     (is (search "@strlen(" ir))
     (is (not (search "__verona_000066000072000065000065" ir)))))
+
+(test calls-a-private-c-struct-through-an-opaque-handle
+  ;; The fixture's struct definition is private to C.  Verona observes only
+  ;; its nominal pointer type, so this also exercises native linking.
+  (is (= 42
+         (compile-and-run-native-with-link-arguments
+          "(type hidden)
+           (external-function hidden-create \"verona_hidden_create\" () (pointer hidden))
+           (external-function hidden-read \"verona_hidden_read\" ((pointer hidden)) i32)
+           (external-function hidden-destroy \"verona_hidden_destroy\" ((pointer hidden)) void)
+           (function main () exit-code
+             (let ((value (pointer hidden) (hidden-create)))
+               (let ((answer i32 (hidden-read value)))
+                 (do (hidden-destroy value) answer))))"
+          (list (namestring (native-c-fixture "tests/native/c/opaque.c")))))))
+
+(test passes-a-known-product-layout-to-native-c
+  ;; This is a native-target ABI test.  The C fixture accesses both fields,
+  ;; so it detects disagreement in the selected product layout or alignment.
+  (is (= 42
+         (compile-and-run-native-with-link-arguments
+          "(type pair (product (left i64) (right i64)))
+           (external-function pair-check \"verona_pair_check\" ((pointer pair)) i32)
+           (function verify ((value pair)) i32 (pair-check (& value)))
+           (function main () exit-code (verify (pair 20 22)))"
+          (list (namestring (native-c-fixture "tests/native/c/layout.c")))))))
 
 (test emits-a-native-object-file
   (let* ((object (native-test-path "o"))

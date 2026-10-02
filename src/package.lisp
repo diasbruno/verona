@@ -479,6 +479,7 @@
    #:function-type-result
    #:defined-type
    #:defined-type-declaration
+   #:opaque-type
    #:product-type
    #:product-type-fields
    #:product-type-find-field
@@ -514,6 +515,7 @@
    #:type-context-array-type
    #:type-context-function-type
    #:type-context-defined-type
+   #:type-context-opaque-type
    #:type-context-product-type
    #:type-context-sum-type
    #:builtin-type-binding

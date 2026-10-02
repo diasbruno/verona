@@ -157,10 +157,10 @@
   ((kind :initarg :kind :reader type-declaration-kind)
    (body :initarg :body :reader type-declaration-body)))
 
-;; TYPE has three explicit surface shapes.  Products and sums retain nominal
-;; identity; aliases deliberately do not, and instead resolve to their target
-;; type.  Keeping aliases as a distinct declaration avoids treating a spelling
-;; such as `(type UserId i64)` as an empty product.
+;; TYPE has four explicit surface shapes.  Products, sums, and opaque types
+;; retain nominal identity; aliases deliberately do not, and instead resolve to
+;; their target type.  Keeping aliases as a distinct declaration avoids
+;; treating a spelling such as `(type UserId i64)` as an empty product.
 (defclass type-alias-declaration (declaration)
   ((target :initarg :target :reader type-alias-declaration-target)))
 
@@ -424,12 +424,17 @@ expands syntax; this processor is the boundary that creates compiler objects."
                      :module unit initargs))))
       (cond
             ((string= head "%type")
-             (let ((arguments (definition-elements expanded-syntax "type" 2)))
-               (unless (= (length arguments) 2)
+             (let ((arguments (definition-elements expanded-syntax "type" 1)))
+               (unless (member (length arguments) '(1 2))
                  (definition-fail expanded-syntax
-                                  "%type requires a name and exactly one type body"))
-               (let* ((name (definition-name expanded-syntax (first arguments)))
-                      (body (second arguments))
+                                  "%type requires a name and at most one type body"))
+               (let ((name (definition-name expanded-syntax (first arguments))))
+                 (if (= (length arguments) 1)
+                     ;; A body-less type is a nominal, incomplete type.  This
+                     ;; is the spelling used for C handles whose layout is
+                     ;; deliberately unavailable to Verona.
+                     (make-declaration 'type-declaration name :kind :opaque :body '())
+                     (let* ((body (second arguments))
                       (body-datum (syntax-datum body))
                       (elements (and (verona-list-p body-datum)
                                      (verona-list-elements body-datum)))
@@ -457,7 +462,7 @@ expands syntax; this processor is the boundary that creates compiler objects."
 		                         (verona-name-value name)))
                        (t
                         (make-declaration 'type-alias-declaration name
-                                          :target body))))))
+                                          :target body))))))))
             ((string= head "%function")
              (let ((arguments (definition-elements expanded-syntax "function" 4)))
                ;; A FOR clause is declaration syntax, not an expression.  It
