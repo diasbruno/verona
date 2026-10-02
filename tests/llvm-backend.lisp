@@ -133,6 +133,18 @@
                           (function main () exit-code
                             (%trunc-primitive-i64-i32 (widen 42)))")))))
 
+(test lowers-transparent-type-aliases-with-their-target-representations
+  (let ((source
+          "(type Count CountBase)
+           (type CountBase i64)
+           (type Pair (product (left Count) (right Count)))
+           (type PairAlias Pair)
+           (function total ((value PairAlias)) Count
+             (+ (field value left) (field value right)))
+           (function main () exit-code
+             (%trunc-primitive-i64-i32 (total (Pair 20 22))))"))
+    (is (= 42 (compile-and-run-native source)))))
+
 (test lowers-let-bindings-as-ssa-values-and-executes-them
   (let* ((source (format nil
                          "(function sequential () i64~%
@@ -162,8 +174,8 @@
 
 (test lowers-products-as-ssa-aggregates-and-executes-them
   (let* ((source
-	  "(type point ((x i64) (y i64)))
-             (type line ((start point) (end point)))
+	  "(type point (product (x i64) (y i64)))
+             (type line (product (start point) (end point)))
              (function make-point ((x i64) (y i64)) point (point x y))
              (function end-y ((value line)) i64 (field (field value end) y))
              (function main () exit-code

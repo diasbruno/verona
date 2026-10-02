@@ -20,7 +20,8 @@
 		#:environment-child #:environment-lookup #:unbound-name-error
 		#:evaluate #:expand #:unit-literal-p
 		#:declaration-name #:declaration-source #:declaration-expanded-syntax #:declaration-module
-		#:type-declaration #:type-declaration-body
+		#:type-declaration #:type-declaration-body #:type-alias-declaration
+		#:type-alias-declaration-target
 		#:function-declaration #:function-declaration-parameters
 		#:function-declaration-return-type #:function-declaration-body
 		#:macro-declaration #:macro-declaration-parameters #:macro-declaration-body
@@ -31,6 +32,8 @@
 		#:duplicate-declaration-error #:non-definition-top-level-error #:verona-macro-p
 		#:semantic-program-declaration #:semantic-function-declaration
 		#:semantic-program-type-context #:semantic-type-declaration
+		#:semantic-type-alias-declaration
+		#:semantic-type-alias-declaration-target-type
 		#:semantic-type-declaration-type #:semantic-type-declaration-fields
 		#:semantic-function-declaration-parameters
 		#:semantic-function-declaration-return-type-reference
@@ -86,7 +89,7 @@
 		#:make-semantic-scope #:semantic-scope-child #:semantic-scope-bind
 		#:semantic-scope-lookup
 		#:unresolved-name-error #:duplicate-local-binding-error #:invalid-definition-context-error
-		#:duplicate-field-error #:recursive-type-not-supported-error #:unknown-field-error
+		#:duplicate-field-error #:recursive-type-not-supported-error #:type-alias-cycle-error #:unknown-field-error
 		#:duplicate-alternative-error
 		#:field-access-requires-product-error #:wrong-argument-count-error
 		#:generic-arity-mismatch-error #:duplicate-generic-implementation-error
@@ -176,7 +179,7 @@
 (test retains-multiple-source-forms-in-a-compilation-unit
   (let ((module (compile-string
 		 (make-compiler)
-		 (format nil "(type Point (x f32) (y f32))~%(function origin () i32 1)")
+		 (format nil "(type Point (product (x f32) (y f32)))~%(function origin () i32 1)")
 		 :name "repl.vrn")))
     (is (typep module 'compilation-unit))
     (is (string= "repl.vrn" (source-name (module-source module))))
@@ -257,7 +260,7 @@
 (test discovers-primitive-definition-declarations
   (let* ((module (compile-string
 		  (make-compiler)
-		  (format nil "(%type Point (x f64) (y f64))~%\
+		  (format nil "(%type Point (product (x f64) (y f64)))~%\
  (%constant pi f64 3.14)~%\
  (%variable counter u64 0)~%\
  (%function add ((a i32) (b i32)) i32 (+ a b))")
@@ -269,7 +272,7 @@
 	 (function (fourth declarations)))
     (is (= 4 (length declarations)))
     (is (typep type 'type-declaration))
-    (is (= 2 (length (type-declaration-body type))))
+    (is (= 1 (length (type-declaration-body type))))
     (is (typep constant 'constant-declaration))
     (is (typep variable 'variable-declaration))
     (is (typep function 'function-declaration))
@@ -288,7 +291,7 @@
   ;; minimal executable macro body without defining surface macro syntax yet.
   (let* ((module (compile-string
 		  (make-compiler)
-		  "(%macro identity (x) x) (identity (%type Later body))"
+		  "(%macro identity (x) x) (identity (%type Later i32))"
 		  :name "macros.vrn"))
 	 (declarations (module-declarations module))
 	 (macro (first declarations))
@@ -328,7 +331,7 @@
 
 (test compiles-surface-definition-macros-without-interpreting-their-content
   (let* ((contents
-	   (format nil "(type Point (x f64) (y f64))~%\
+	   (format nil "(type Point (product (x f64) (y f64)))~%\
  (constant pi f64 3.141592653589793)~%\
  (variable counter u64 0)~%\
  (function calculate ((x i32)) i32 (+ x 1))"))
@@ -351,7 +354,7 @@
 (test makes-user-macros-available-after-the-surface-macro-declaration
   (let* ((module (compile-string
 		  (make-compiler)
-		  "(macro identity (x) x) (identity (type Later (value i32)))"
+		  "(macro identity (x) x) (identity (type Later (product (value i32))))"
 		  :name "surface-macros.vrn"))
 	 (declarations (module-declarations module))
 	 (macro (first declarations))
@@ -367,7 +370,7 @@
 (test retains-original-and-expanded-declaration-syntax
   (let* ((module (compile-string
 		  (make-compiler)
-		  "(macro identity (x) x) (identity (type Later (value i32)))"
+		  "(macro identity (x) x) (identity (type Later (product (value i32))))"
 		  :name "expanded.vrn"))
 	 (source (second (module-forms module)))
 	 (declaration (second (unit-declarations module)))
@@ -452,7 +455,7 @@
 (test resolves-global-bindings-signatures-and-forward-calls-by-identity
   (let* ((unit (compile-string
                 (make-compiler)
-                "(type Point body)\
+                "(type Point (product))\
                  (constant origin i32 0)\
                  (function second ((p Point)) i32 origin)\
                  (function first ((p Point)) i32 (second p))"))
@@ -536,7 +539,7 @@
 (test resolves-canonical-primitive-pointer-and-function-types
   (let* ((unit (compile-string
                 (make-compiler)
-                "(type Node ((value i32) (next (pointer i32))))\
+                "(type Node (product (value i32) (next (pointer i32))))\
                  (variable current (pointer Node) (deref (& current)))\
                  (function distance ((a (pointer Node))\
                                      (b (pointer (pointer i32)))) f64 3.14)\
@@ -582,6 +585,52 @@
             (semantic-function-declaration-type another-semantic)))
     (is (typep (semantic-function-declaration-return-type nothing-semantic)
                'unit-type))))
+
+(test resolves-transparent-type-aliases-and-forward-chains
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(type AccountId UserId)
+                 (type UserId i64)
+                 (type Point (product (x i64)))
+                 (type Coordinate Point)
+                 (generic identity (value))
+                 (implementation identity ((value i64)) i64 value)
+                 (function use-id ((value AccountId)) i64 (identity value))
+                 (function get-x ((value Coordinate)) i64 (field value x))"))
+         (program (compilation-unit-semantic-program unit))
+         (declarations (unit-declarations unit))
+         (account-id (first declarations))
+         (user-id (second declarations))
+         (point (third declarations))
+         (coordinate (fourth declarations))
+         (use-id (nth 6 declarations))
+         (account-semantic (semantic-program-declaration program account-id))
+         (user-semantic (semantic-program-declaration program user-id))
+         (point-semantic (semantic-program-declaration program point))
+         (coordinate-semantic (semantic-program-declaration program coordinate))
+         (use-id-semantic (semantic-program-declaration program use-id))
+         (parameter (first (semantic-function-declaration-parameters use-id-semantic))))
+    (is (typep account-id 'type-alias-declaration))
+    (is (typep account-semantic 'semantic-type-alias-declaration))
+    (is (eq (semantic-type-alias-declaration-target-type account-semantic)
+            (semantic-type-alias-declaration-target-type user-semantic)))
+    (is (eq (semantic-type-alias-declaration-target-type account-semantic)
+            (parameter-binding-type parameter)))
+    (is (eq (semantic-type-alias-declaration-target-type coordinate-semantic)
+            (semantic-type-declaration-type point-semantic)))
+    (is (eq program (validate-for-backend program)))))
+
+(test rejects-type-alias-cycles-and-implicit-product-syntax
+  (signals type-alias-cycle-error
+    (compile-string (make-compiler) "(type left right) (type right left)"))
+  (signals recursive-type-not-supported-error
+    (compile-string (make-compiler)
+                    "(type node-link (pointer node))
+                     (type node (product (next node-link)))"))
+  (signals verona:definition-error
+    (compile-string (make-compiler) "(type point (x i64))"))
+  (signals verona:definition-error
+    (compile-string (make-compiler) "(type point ((x i64)))")))
 
 (test rejects-resolved-names-that-do-not-denote-types
   (signals expected-type-error
@@ -870,8 +919,8 @@
 (test resolves-nominal-product-fields-construction-and-access
   (let* ((unit (compile-string
 		(make-compiler)
-		"(type point ((x i64) (y i64)))
-                 (type size ((x i64) (y i64)))
+		"(type point (product (x i64) (y i64)))
+                 (type size (product (x i64) (y i64)))
                  (function get-x ((p point)) i64 (field p x))
                  (function main () i64
                    (let ((p point (point 20 22)))
@@ -973,20 +1022,20 @@
 
 (test rejects-invalid-product-definitions-construction-and-fields
   (signals duplicate-field-error
-    (compile-string (make-compiler) "(type point ((x i64) (x i64)))"))
+    (compile-string (make-compiler) "(type point (product (x i64) (x i64)))"))
   (signals recursive-type-not-supported-error
-    (compile-string (make-compiler) "(type node ((next (pointer node))))"))
+    (compile-string (make-compiler) "(type node (product (next (pointer node))))"))
   (signals wrong-argument-count-error
     (compile-string (make-compiler)
-                    "(type point ((x i64) (y i64))) (function main () i64 (field (point 20) x))"))
+                    "(type point (product (x i64) (y i64))) (function main () i64 (field (point 20) x))"))
   (signals unknown-field-error
     (compile-string (make-compiler)
-                    "(type point ((x i64))) (function main () i64 (field (point 20) z))"))
+                    "(type point (product (x i64))) (function main () i64 (field (point 20) z))"))
   (signals field-access-requires-product-error
     (compile-string (make-compiler) "(function main () i64 (field 42 x))"))
   (signals type-mismatch-error
     (compile-string (make-compiler)
-                    "(type point ((x i64))) (type size ((x i64)))
+                    "(type point (product (x i64))) (type size (product (x i64)))
                      (function consume ((value size)) i64 0)
                      (function main () i64 (consume (point 42)))")))
 

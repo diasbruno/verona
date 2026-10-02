@@ -160,7 +160,10 @@
    #:declaration-module
    #:declaration-compilation-unit
    #:type-declaration
+   #:type-declaration-kind
    #:type-declaration-body
+   #:type-alias-declaration
+   #:type-alias-declaration-target
    #:function-declaration
    #:function-declaration-for-clause
    #:function-declaration-parameters
@@ -246,6 +249,11 @@
    #:semantic-type-declaration
    #:semantic-type-declaration-type
    #:semantic-type-declaration-fields
+   #:semantic-type-alias-declaration
+   #:semantic-type-alias-declaration-target-reference
+   #:semantic-type-alias-declaration-target-type
+   #:type-alias-binding
+   #:type-alias-binding-type
    #:semantic-constant-declaration
    #:semantic-constant-declaration-type-reference
    #:semantic-constant-declaration-type
@@ -569,6 +577,7 @@
    #:duplicate-alternative-error-name
    #:duplicate-alternative-error-existing
    #:recursive-type-not-supported-error
+   #:type-alias-cycle-error
    #:unknown-field-error
    #:unknown-field-error-product-type
    #:unknown-field-error-name

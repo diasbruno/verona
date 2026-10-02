@@ -154,7 +154,15 @@
            :reader declaration-compilation-unit)))
 
 (defclass type-declaration (declaration)
-  ((body :initarg :body :reader type-declaration-body)))
+  ((kind :initarg :kind :reader type-declaration-kind)
+   (body :initarg :body :reader type-declaration-body)))
+
+;; TYPE has three explicit surface shapes.  Products and sums retain nominal
+;; identity; aliases deliberately do not, and instead resolve to their target
+;; type.  Keeping aliases as a distinct declaration avoids treating a spelling
+;; such as `(type UserId i64)` as an empty product.
+(defclass type-alias-declaration (declaration)
+  ((target :initarg :target :reader type-alias-declaration-target)))
 
 (defclass function-declaration (declaration)
   ((for-clause :initarg :for-clause :initform nil
@@ -416,9 +424,40 @@ expands syntax; this processor is the boundary that creates compiler objects."
                      :module unit initargs))))
       (cond
             ((string= head "%type")
-             (let* ((arguments (definition-elements expanded-syntax "type" 2))
-                    (name (definition-name expanded-syntax (first arguments))))
-               (make-declaration 'type-declaration name :body (rest arguments))))
+             (let ((arguments (definition-elements expanded-syntax "type" 2)))
+               (unless (= (length arguments) 2)
+                 (definition-fail expanded-syntax
+                                  "%type requires a name and exactly one type body"))
+               (let* ((name (definition-name expanded-syntax (first arguments)))
+                      (body (second arguments))
+                      (body-datum (syntax-datum body))
+                      (elements (and (verona-list-p body-datum)
+                                     (verona-list-elements body-datum)))
+                      (head-syntax (first elements))
+                      (head (and head-syntax (syntax-datum head-syntax))))
+                 (cond ((and (verona-name-p head)
+                             (string= (verona-name-value head) "product"))
+                        (make-declaration 'type-declaration name
+                                          :kind :product :body (list body)))
+                       ((and (verona-name-p head)
+                             (string= (verona-name-value head) "sum"))
+                        (make-declaration 'type-declaration name
+                                          :kind :sum :body (list body)))
+		       ;; `(type Point (x i32))` and `(type Point ((x i32)))`
+		       ;; used to be accepted as products by shape heuristics.  TYPE
+		       ;; now reserves its single type-expression form for aliases.
+		       ((and elements
+		             (or (verona-list-p head)
+			 (and (= (length elements) 2)
+			      (verona-name-p head)
+			      (not (member (verona-name-value head)
+					  '("pointer" "array") :test #'string=)))))
+		        (definition-fail expanded-syntax
+		                         "implicit product syntax is not supported; use (type ~A (product ...))"
+		                         (verona-name-value name)))
+                       (t
+                        (make-declaration 'type-alias-declaration name
+                                          :target body))))))
             ((string= head "%function")
              (let ((arguments (definition-elements expanded-syntax "function" 4)))
                ;; A FOR clause is declaration syntax, not an expression.  It

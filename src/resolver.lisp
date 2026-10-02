@@ -427,6 +427,23 @@ the semantic type of a unit expression remains UnitType."
    (fields :initform '() :accessor semantic-type-declaration-fields)
    (alternatives :initform '() :accessor semantic-type-declaration-alternatives)))
 
+(defclass semantic-type-alias-declaration (semantic-declaration)
+  ((target-reference :initform nil
+                     :accessor semantic-type-alias-declaration-target-reference)
+   (target-type :initform nil
+                :accessor semantic-type-alias-declaration-target-type)
+   ;; This state permits forward chains while diagnosing cycles directly.
+   (state :initform :unresolved :accessor semantic-type-alias-declaration-state)))
+
+(defclass type-alias-binding (semantic-binding)
+  ((declaration :initarg :declaration :reader type-alias-binding-declaration)
+   (semantic-declaration :initarg :semantic-declaration
+                         :reader type-alias-binding-semantic-declaration)))
+
+(defun type-alias-binding-type (binding)
+  (semantic-type-alias-declaration-target-type
+   (type-alias-binding-semantic-declaration binding)))
+
 (defclass semantic-constant-declaration (semantic-declaration)
   ((type-reference :initform nil
                    :accessor semantic-constant-declaration-type-reference)
@@ -810,7 +827,8 @@ than recovered later through ad-hoc string comparisons."
 
 (defun imported-binding (program imported declaration)
   (let ((semantic (semantic-program-declaration program declaration)))
-    (if (typep semantic 'semantic-generic-declaration)
+    (if (or (typep semantic 'semantic-generic-declaration)
+            (typep semantic 'semantic-type-alias-declaration))
         (let ((scope (semantic-program-module-scope-for program imported)))
           (semantic-scope-lookup scope (declaration-name declaration)))
         declaration)))
@@ -946,6 +964,9 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 
 (define-condition recursive-type-not-supported-error (semantic-error) ())
 
+(define-condition type-alias-cycle-error (semantic-error) ()
+  (:default-initargs :message "TypeAliasCycle"))
+
 (define-condition unknown-field-error (semantic-error)
   ((product-type :initarg :product-type :reader unknown-field-error-product-type)
    (name :initarg :name :reader unknown-field-error-name)))
@@ -969,7 +990,7 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
                            :key #'sum-alternative-name :test #'verona-name=)))
     (values alternative (not (null alternative)))))
 
-(defun resolve-type (type-context resolved-type-syntax)
+(defun resolve-type (type-context resolved-type-syntax &optional program)
   "Turn resolved type syntax into a canonical, backend-independent type."
   (check-type type-context type-context)
   (cond ((typep resolved-type-syntax 'semantic-reference)
@@ -977,6 +998,14 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 	   (cond ((typep binding 'builtin-type-binding)
 		  (builtin-type-binding-type binding))
 		 ((typep binding 'type-parameter) binding)
+		 ((typep binding 'type-alias-binding)
+                  (when program
+                    (resolve-type-alias
+                     program (type-alias-binding-semantic-declaration binding)))
+                  (or (type-alias-binding-type binding)
+                      (error 'semantic-error
+                             :syntax (semantic-expression-syntax resolved-type-syntax)
+                             :message "type alias has not been resolved")))
 		 ((typep binding 'type-declaration)
 		  (type-context-defined-type type-context binding))
 		 (t (error 'expected-type-error
@@ -985,13 +1014,13 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 	((typep resolved-type-syntax 'semantic-unit-type-syntax)
 	 (type-context-unit-type type-context))
 	((typep resolved-type-syntax 'semantic-pointer-type-syntax)
-	 (type-context-pointer-type
-	  type-context
+	  (type-context-pointer-type
+	   type-context
 	  (resolve-type type-context
-		(semantic-pointer-type-syntax-target resolved-type-syntax))))
+		(semantic-pointer-type-syntax-target resolved-type-syntax) program)))
 	((typep resolved-type-syntax 'semantic-array-type-syntax)
 	 (let ((element-type (resolve-type type-context
-				   (semantic-array-type-syntax-element-type resolved-type-syntax))))
+			   (semantic-array-type-syntax-element-type resolved-type-syntax) program)))
 	   (unless (sized-type-p element-type)
 	     (error 'semantic-error :syntax (semantic-type-syntax-syntax resolved-type-syntax)
 	            :message "array element type must be sized"))
@@ -1382,6 +1411,8 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 (defun make-semantic-declaration (declaration)
   (cond ((typep declaration 'type-declaration)
 	 (make-instance 'semantic-type-declaration :source-declaration declaration))
+	((typep declaration 'type-alias-declaration)
+         (make-instance 'semantic-type-alias-declaration :source-declaration declaration))
 	((typep declaration 'constant-declaration)
 	 (make-instance 'semantic-constant-declaration :source-declaration declaration))
 	((typep declaration 'variable-declaration)
@@ -1434,30 +1465,20 @@ the following type pass can turn it into canonical VERONA-TYPE objects."
 		 (resolve-type-syntax scope (variable-declaration-type declaration)))))))
 
 (defun product-field-syntaxes (declaration)
-  "Normalize the product body while accepting the earlier flat form.
+  "Return explicit PRODUCT fields from DECLARATION.
 
-The documented spelling has one list containing every field.  Accepting the
-previous flat spelling keeps source compatibility without changing the
-semantic representation."
+Products are deliberately explicit: aliases own the `(type Name Type)`
+shape, so accepting field-list shorthand would make declarations ambiguous."
   (let ((body (type-declaration-body declaration)))
-    ;; The explicit algebraic spelling is preferred, while the Step 15
-    ;; spellings below remain accepted for source compatibility.
-    (when (and (= (length body) 1) (verona-list-p (syntax-datum (first body))))
-      (let ((elements (verona-list-elements (syntax-datum (first body)))))
-        (when (and elements (verona-name-p (syntax-datum (first elements)))
+    (unless (and (= (length body) 1) (verona-list-p (syntax-datum (first body))))
+      (error 'semantic-error :syntax (declaration-source declaration)
+             :message "product type body must be a (product ...) form"))
+    (let ((elements (verona-list-elements (syntax-datum (first body)))))
+      (unless (and elements (verona-name-p (syntax-datum (first elements)))
                    (string= (verona-name-value (syntax-datum (first elements))) "product"))
-          (return-from product-field-syntaxes (rest elements)))))
-    (cond ((and (= (length body) 1) (verona-list-p (syntax-datum (first body)))
-		(let ((elements (verona-list-elements (syntax-datum (first body)))))
-		  (or (null elements)
-		      (verona-list-p (syntax-datum (first elements))))))
-	   (verona-list-elements (syntax-datum (first body))))
-	  ((every (lambda (syntax) (verona-list-p (syntax-datum syntax))) body) body)
-	  ;; Earlier front-end milestones allowed TYPE to be an opaque declaration
-	  ;; payload.  Preserve those expansion tests as a zero-field nominal
-	  ;; product; actual product syntax is always list-shaped.
-	  ((every (lambda (syntax) (not (verona-list-p (syntax-datum syntax)))) body) '())
-	  (t body))))
+        (error 'semantic-error :syntax (first body)
+               :message "product type body must begin with product"))
+      (rest elements))))
 
 (defun parse-product-field-syntax (field-syntax)
   (unless (verona-list-p (syntax-datum field-syntax))
@@ -1473,25 +1494,35 @@ semantic representation."
                :message "product field name must be a Verona name"))
       (values name (second elements)))))
 
-(defun ensure-type-is-complete (program resolved-type-syntax syntax)
+(defun ensure-type-is-complete (program resolved-type-syntax syntax &optional seen-aliases)
   "Reject self and forward references before a finite type gets a layout."
   (cond ((typep resolved-type-syntax 'semantic-reference)
          (let ((binding (semantic-reference-binding resolved-type-syntax)))
-           (when (typep binding 'type-declaration)
-             (let ((semantic (semantic-program-declaration program binding)))
-               (unless (and (typep semantic 'semantic-type-declaration)
-                            (typep (semantic-type-declaration-type semantic)
-                                   '(or product-type sum-type)))
-                 (error 'recursive-type-not-supported-error :syntax syntax
-                        :message "RecursiveTypeNotSupported: type members may reference only earlier complete types"))))))
+           (cond ((typep binding 'type-alias-binding)
+                  (when (member binding seen-aliases :test #'eq)
+                    (error 'type-alias-cycle-error :syntax syntax))
+                  (ensure-type-is-complete
+                   program
+                   (or (semantic-type-alias-declaration-target-reference
+                        (type-alias-binding-semantic-declaration binding))
+                       (prepare-type-alias-reference
+                        program (type-alias-binding-semantic-declaration binding)))
+                   syntax (cons binding seen-aliases)))
+                 ((typep binding 'type-declaration)
+                  (let ((semantic (semantic-program-declaration program binding)))
+                    (unless (and (typep semantic 'semantic-type-declaration)
+                                 (typep (semantic-type-declaration-type semantic)
+                                        '(or product-type sum-type)))
+                      (error 'recursive-type-not-supported-error :syntax syntax
+                             :message "RecursiveTypeNotSupported: type members may reference only earlier complete types")))))))
         ((typep resolved-type-syntax 'semantic-pointer-type-syntax)
          ;; Pointer recursion is deferred with all other recursive product
          ;; machinery, even though LLVM could represent some instances.
          (ensure-type-is-complete
-          program (semantic-pointer-type-syntax-target resolved-type-syntax) syntax))
+          program (semantic-pointer-type-syntax-target resolved-type-syntax) syntax seen-aliases))
         ((typep resolved-type-syntax 'semantic-array-type-syntax)
          (ensure-type-is-complete
-          program (semantic-array-type-syntax-element-type resolved-type-syntax) syntax))))
+          program (semantic-array-type-syntax-element-type resolved-type-syntax) syntax seen-aliases))))
 
 (defun resolve-product-type-declaration (program semantic-declaration)
   (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
@@ -1508,7 +1539,7 @@ semantic representation."
         (let ((reference (resolve-type-syntax scope type-syntax)))
           (ensure-type-is-complete program reference type-syntax)
           (push (make-instance 'product-field :name name
-                               :type (resolve-type context reference)
+                               :type (resolve-type context reference program)
                                :index (length fields) :source field-syntax)
                 fields))))
     (setf fields (nreverse fields))
@@ -1567,7 +1598,7 @@ semantic representation."
                 (mapcar (lambda (payload-syntax)
                           (let ((reference (resolve-type-syntax scope payload-syntax)))
                             (ensure-type-is-complete program reference payload-syntax)
-                            (resolve-type context reference)))
+                            (resolve-type context reference program)))
                         payload-syntaxes)))
           (push (make-instance 'sum-alternative :sum-type sum-type :name name
                                :index (length alternatives)
@@ -1579,6 +1610,33 @@ semantic representation."
     (setf (slot-value sum-type 'alternatives) alternatives
           (semantic-type-declaration-alternatives semantic-declaration) alternatives
           (semantic-type-declaration-type semantic-declaration) sum-type)))
+
+(defun prepare-type-alias-reference (program semantic-declaration)
+  "Resolve an alias target's names without forcing its canonical type yet."
+  (or (semantic-type-alias-declaration-target-reference semantic-declaration)
+      (let* ((declaration (semantic-declaration-source-declaration semantic-declaration))
+             (scope (semantic-program-module-scope-for program (declaration-module declaration)))
+             (reference (resolve-type-syntax scope (type-alias-declaration-target declaration))))
+        (setf (semantic-type-alias-declaration-target-reference semantic-declaration) reference)
+        reference)))
+
+(defun resolve-type-alias (program semantic-declaration)
+  "Resolve one alias, recursively resolving aliases in its target first."
+  (case (semantic-type-alias-declaration-state semantic-declaration)
+    (:resolved (return-from resolve-type-alias
+                 (semantic-type-alias-declaration-target-type semantic-declaration)))
+    (:resolving
+     (error 'type-alias-cycle-error
+            :syntax (type-alias-declaration-target
+                     (semantic-declaration-source-declaration semantic-declaration))))
+    (:unresolved))
+  (setf (semantic-type-alias-declaration-state semantic-declaration) :resolving)
+  (let* ((reference (prepare-type-alias-reference program semantic-declaration))
+         (type (resolve-type (semantic-program-type-context program) reference program)))
+    (setf (semantic-type-alias-declaration-target-reference semantic-declaration) reference
+          (semantic-type-alias-declaration-target-type semantic-declaration) type
+          (semantic-type-alias-declaration-state semantic-declaration) :resolved)
+    type))
 
 (defun resolve-declaration-types (program semantic-declaration)
   "Attach canonical types to the already name-resolved declaration interface."
@@ -1652,20 +1710,28 @@ Expression bodies are intentionally untouched: this pass establishes only
 declaration signatures and nominal type identities for the later expression
 type checker."
   (check-type program semantic-program)
+  ;; Resolve alias names first, without manufacturing types for a product or
+  ;; sum whose layout has not been installed yet.  The references also let the
+  ;; completeness pass look through an alias used in a member declaration.
+  (dolist (entry (semantic-program-declarations program))
+    (let ((declaration (cdr entry)))
+      (when (typep declaration 'semantic-type-alias-declaration)
+        (prepare-type-alias-reference program declaration))))
   ;; Finite product and sum definitions are resolved in source order.  Members
   ;; can use only a previously completed type; recursion is deferred.
   (dolist (entry (semantic-program-declarations program))
     (let ((declaration (cdr entry)))
       (when (typep declaration 'semantic-type-declaration)
-        (let* ((source (semantic-declaration-source-declaration declaration))
-               (body (type-declaration-body source))
-               (first-body (first body))
-               (head (and first-body (verona-list-p (syntax-datum first-body))
-                          (first (verona-list-elements (syntax-datum first-body))))))
-          (if (and head (verona-name-p (syntax-datum head))
-                   (string= (verona-name-value (syntax-datum head)) "sum"))
-              (resolve-sum-type-declaration program declaration)
-              (resolve-product-type-declaration program declaration))))))
+        (ecase (type-declaration-kind
+                (semantic-declaration-source-declaration declaration))
+          (:product (resolve-product-type-declaration program declaration))
+          (:sum (resolve-sum-type-declaration program declaration))))))
+  ;; Now all nominal layouts exist, so an alias to one receives its complete
+  ;; canonical ProductType or SumType rather than a provisional DefinedType.
+  (dolist (entry (semantic-program-declarations program))
+    (let ((declaration (cdr entry)))
+      (when (typep declaration 'semantic-type-alias-declaration)
+        (resolve-type-alias program declaration))))
   (dolist (entry (semantic-program-declarations program))
     (resolve-declaration-types program (cdr entry)))
   program)
@@ -3362,6 +3428,12 @@ ready for lowering as one LLVM module."
                                                    :name (declaration-name declaration)
                                                    :protocol (semantic-protocol-declaration-protocol
                                                               semantic-declaration))))
+	      ((typep semantic-declaration 'semantic-type-alias-declaration)
+               (semantic-scope-bind module-scope (declaration-name declaration)
+                                    (make-instance 'type-alias-binding
+                                                   :name (declaration-name declaration)
+                                                   :declaration declaration
+                                                   :semantic-declaration semantic-declaration)))
               ((not (typep declaration 'implementation-declaration))
                (semantic-scope-bind module-scope (declaration-name declaration) declaration)))))
     (dolist (entry (semantic-program-declarations program))

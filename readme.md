@@ -25,7 +25,7 @@ access, pattern matching, local bindings, a generic with an implementation,
 and a protocol constraint:
 
 ```lisp
-(type point ((x i32) (y i32)))
+(type point (product (x i32) (y i32)))
 
 (type option (sum (none) (some i32)))
 

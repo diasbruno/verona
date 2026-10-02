@@ -52,16 +52,23 @@ linker or archiver.
 | `(pointer TYPE)` | Pointer type. Pointers to `void` cannot be dereferenced. |
 | `(function (TYPE...) RESULT)` | Function type syntax. |
 
-Product types use `(type Name ((field Type) ...))`.  Sum types use
+Type aliases use `(type Name Type)`, for example `(type UserId i64)`. Product
+types use `(type Name (product (field Type) ...))`; sum types use
 `(type Name (sum (case Type...) ...))`; a zero-payload case is written
-`(case)`.  A product is constructed as `(Name value...)`, a sum as
+`(case)`. A product is constructed as `(Name value...)`, a sum as
 `(case value...)`, and product fields are read with `(field value field-name)`.
+Aliases are transparent: they have their target's identity and representation,
+and introduce no constructor of their own. An alias of a nominal type uses the
+target's existing constructor. Use a product or sum type when a distinct
+nominal type is required.
 
 ### Top-level forms
 
 | Form | Purpose |
 | --- | --- |
-| `(type NAME BODY)` | Define a product or sum type. |
+| `(type NAME TYPE)` | Define a transparent type alias. |
+| `(type NAME (product FIELD...))` | Define a nominal product type. |
+| `(type NAME (sum CASE...))` | Define a nominal sum type. |
 | `(function NAME ((parameter TYPE) ...) RESULT BODY)` | Define a function. |
 | `(external-function NAME "c_name" (TYPE...) RESULT)` | Declare a C function. Parameters must use scalar or pointer C ABI types; a result may also be `void`. |
 | `(macro NAME (parameter ...) BODY)` | Define a compile-time macro. Parameters and result are syntax objects. |
@@ -193,10 +200,10 @@ requiring slot access:
 
 | Family | Public accessors |
 | --- | --- |
-| Source declarations | `declaration-name`, `declaration-source`, `declaration-expanded-syntax`, `declaration-module`, `declaration-compilation-unit`; `type-declaration-body`; `function-declaration-parameters`, `function-declaration-return-type`, `function-declaration-body`; `external-function-declaration-external-name`, `external-function-declaration-parameter-types`, `external-function-declaration-result-type`; `macro-declaration-parameters`, `macro-declaration-body`; `constant-declaration-type`, `constant-declaration-value`; `variable-declaration-type`, `variable-declaration-initializer`; `generic-declaration-parameters`, `generic-declaration-arity`; `implementation-declaration-generic-name`, `implementation-declaration-parameters`, `implementation-declaration-return-type`, `implementation-declaration-body`. |
+| Source declarations | `declaration-name`, `declaration-source`, `declaration-expanded-syntax`, `declaration-module`, `declaration-compilation-unit`; `type-declaration-kind`, `type-declaration-body`, `type-alias-declaration-target`; `function-declaration-parameters`, `function-declaration-return-type`, `function-declaration-body`; `external-function-declaration-external-name`, `external-function-declaration-parameter-types`, `external-function-declaration-result-type`; `macro-declaration-parameters`, `macro-declaration-body`; `constant-declaration-type`, `constant-declaration-value`; `variable-declaration-type`, `variable-declaration-initializer`; `generic-declaration-parameters`, `generic-declaration-arity`; `implementation-declaration-generic-name`, `implementation-declaration-parameters`, `implementation-declaration-return-type`, `implementation-declaration-body`. |
 | Scopes and programs | `make-semantic-scope`, `semantic-scope-child`, `semantic-scope-bind`, `semantic-scope-find`, `semantic-scope-lookup`, `semantic-scope-parent`, `semantic-scope-owning-program`, `semantic-scope-owning-type-context`, `semantic-scope-owning-function`; `semantic-program-module-scope-for`, `semantic-program-declaration`, `make-bootstrap-semantic-scope`; `semantic-program-bootstrap-scope`, `semantic-program-module-scope`, `semantic-program-declarations`, `semantic-program-type-context`, `program-entry-module`, `program-modules`, `program-module-graph`, `program-target`, `semantic-program-native-exports`. |
 | Bindings and generics | `semantic-binding-name`; parameter, pattern, and let-binding accessors prefixed `parameter-binding-`, `pattern-binding-`, and `let-binding-`; `generic-name`, `generic-arity`, `generic-implementations`, `generic-find-implementation`; `generic-binding-generic`; and generic-implementation accessors prefixed `generic-implementation-`. |
-| Semantic declarations | `semantic-declaration-source-declaration`; accessors prefixed `semantic-type-declaration-`, `semantic-constant-declaration-`, `semantic-variable-declaration-`, `semantic-function-declaration-`, `semantic-external-function-declaration-`, and `semantic-generic-implementation-`. |
+| Semantic declarations | `semantic-declaration-source-declaration`; accessors prefixed `semantic-type-declaration-`, `semantic-type-alias-declaration-`, `semantic-constant-declaration-`, `semantic-variable-declaration-`, `semantic-function-declaration-`, `semantic-external-function-declaration-`, and `semantic-generic-implementation-`. |
 | Expressions and patterns | `semantic-expression-syntax`, `semantic-expression-type`, `expression-syntax`, `expression-source`, `expression-type`; accessors prefixed `semantic-reference-`, `semantic-call-`, `external-call-expression-`, `primitive-call-`, `conversion-expression-`, `pointer-cast-expression-`, `construct-expression-`, `sum-construct-expression-`, `field-expression-`, `sequence-expression-`, `let-expression-`, `address-expression-`, `dereference-expression-`, `load-expression-`, `assignment-expression-`, `store-expression-`, `return-expression-`, `pattern-`, `literal-pattern-`, `binding-pattern-`, `constructor-pattern-`, `match-case-`, and `match-expression-`. |
 
 The analysis functions are `resolve-type`, `resolve-types`, `infer-expression`,
