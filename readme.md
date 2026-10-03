@@ -164,6 +164,20 @@ directory containing `verona.build`.
 For the complete source-language, Common Lisp, LLVM, compiler-driver, and
 declarative-build reference, see [the API documentation](docs/API.md).
 
+## Editor support
+
+An Emacs major mode is included at
+[`editors/emacs/verona-mode.el`](editors/emacs/verona-mode.el).  Add that
+directory to `load-path` and load the mode from your Emacs configuration:
+
+```elisp
+(add-to-list 'load-path "/path/to/verona/editors/emacs")
+(require 'verona-mode)
+```
+
+It automatically selects itself for `.vrn`, `.verona`, and `verona.build`
+files, and provides Verona-aware font locking and Lisp-style indentation.
+
 ## License
 
 Verona is released under the [Unlicense](license): it is free and
