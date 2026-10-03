@@ -12,6 +12,19 @@
                (llvm:void-type :context (llvm-backend-context backend)))
               ((typep type 'verona:boolean-type)
                (llvm:int1-type :context (llvm-backend-context backend)))
+              ((typep type 'verona:char-type)
+               ;; Verona characters are restricted to ASCII code units.
+               (llvm:int-type 8 :context (llvm-backend-context backend)))
+              ((typep type 'verona:string-type)
+               ;; Immutable ASCII slice: byte pointer and byte length.  The
+               ;; literal lowering also keeps a trailing NUL privately, but
+               ;; it is not part of this value's length or semantics.
+               (llvm:struct-type
+                (list (llvm:pointer-type
+                       (llvm:int-type 8 :context (llvm-backend-context backend)))
+                      (llvm:int-type (llvm-backend-pointer-width backend)
+                                     :context (llvm-backend-context backend)))
+                nil :context (llvm-backend-context backend)))
               ((typep type 'verona:integer-type)
                (llvm:int-type (verona:integer-type-width type)
                               :context (llvm-backend-context backend)))

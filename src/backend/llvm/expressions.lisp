@@ -9,6 +9,41 @@
              (llvm:function-type (llvm:void-type :context (llvm-backend-context backend))
                                  '())))))
 
+(defun ascii-octets (text)
+  "Return TEXT's ASCII bytes, defending the backend boundary as well."
+  (unless (every (lambda (character) (<= (char-code character) #x7f)) text)
+    (backend-fail "string literal is not ASCII: ~S" text))
+  (map 'list #'char-code text))
+
+(defun emit-string-literal (backend expression)
+  "Lower an ASCII STRING literal to a byte slice backed by a private global."
+  (let* ((context (llvm-backend-context backend))
+         (byte-type (llvm:int-type 8 :context context))
+         (octets (ascii-octets (verona:string-literal-value expression)))
+         ;; The NUL is intentionally outside the slice length.  It makes the
+         ;; static storage useful to future explicit C-string interop without
+         ;; weakening Verona strings' embedded-NUL semantics.
+         (storage (append octets (list 0)))
+         (storage-type (llvm:array-type byte-type (length storage)))
+         (ordinal (incf (llvm-backend-string-literal-counter backend)))
+         (global (llvm:add-global (llvm-backend-module backend) storage-type
+                                  (format nil ".verona.string.~D" ordinal)))
+         ;; LLVM 23 pointers are opaque: a global array's address is directly
+         ;; usable as the pointer to its first byte.  This also avoids the
+         ;; removed legacy LLVMConstInBoundsGEP API.
+         (pointer global)
+         (length-value
+           (llvm:const-int (llvm:int-type (llvm-backend-pointer-width backend)
+                                          :context context)
+                           (length octets))))
+    (setf (llvm:initializer global)
+          (llvm:const-array byte-type
+                            (mapcar (lambda (octet) (llvm:const-int byte-type octet))
+                                    storage))
+          (llvm:global-constant-p global) t
+          (llvm:linkage global) :private)
+    (llvm:const-struct (list pointer length-value) nil :context context)))
+
 (defun emit-checked-array-element-address (backend array-type base-address index-expression)
   "Branch to llvm.trap when INDEX is outside ARRAY-TYPE, then form its GEP."
   (let* ((builder (llvm-backend-builder backend))
@@ -223,12 +258,17 @@ only job here is to form the CFG and merge non-terminating case values."
     ((typep expression 'verona:boolean-literal)
      (llvm:const-int (lower-type backend (verona:expression-type expression))
                      (if (verona:boolean-literal-value expression) 1 0)))
+    ((typep expression 'verona:character-literal)
+     (llvm:const-int (lower-type backend (verona:expression-type expression))
+                     (char-code (verona:character-literal-value expression))))
     ((typep expression 'verona:integer-literal)
      (llvm:const-int (lower-type backend (verona:expression-type expression))
                      (verona:integer-literal-value expression)))
     ((typep expression 'verona:float-literal)
      (llvm:const-real (lower-type backend (verona:expression-type expression))
                       (verona:float-literal-value expression)))
+    ((typep expression 'verona:string-literal)
+     (emit-string-literal backend expression))
     ((typep expression 'verona:construct-expression)
      (let ((aggregate (llvm:undef (lower-type backend
                                              (verona:construct-expression-product-type expression)))))

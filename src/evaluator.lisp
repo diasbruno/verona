@@ -210,7 +210,8 @@ forms such as %FUNCTION are therefore left as Verona syntax for later processing
              (if (eq expanded syntax)
                  (evaluate-list syntax environment)
                  (evaluate expanded environment))))
-          ;; Unit, booleans, numbers, and strings are self-evaluating values.
+          ;; Unit, booleans, characters, numbers, and strings are
+          ;; self-evaluating values.
           (t datum))))
 
 (defun bootstrap-definition-macro (primitive-name)

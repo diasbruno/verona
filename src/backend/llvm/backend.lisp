@@ -21,6 +21,7 @@
              :reader llvm-backend-bindings)
    (types :initform (make-hash-table :test #'eq)
           :reader llvm-backend-types)
+   (string-literal-counter :initform 0 :accessor llvm-backend-string-literal-counter)
    (trap-function :initform nil :accessor llvm-backend-trap-function)))
 
 (defun make-llvm-backend (&key (module-name "verona")
@@ -91,6 +92,7 @@ iteration order."
         ((typep type 'verona:unit-type) "unit")
         ((typep type 'verona:void-type) "void")
         ((typep type 'verona:boolean-type) "bool")
+        ((typep type 'verona:char-type) "char")
         ((typep type 'verona:string-type) "string")
         ((typep type 'verona:integer-type)
          (format nil "~:[u~;i~]~D" (verona:integer-type-signed type)

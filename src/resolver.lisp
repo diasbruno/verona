@@ -23,6 +23,7 @@
 ;; with void or an integer zero.
 (defclass unit-value () ())
 (defclass boolean-type (verona-type) ())
+(defclass char-type (verona-type) ())
 (defclass string-type (verona-type) ())
 (defclass integer-type (verona-type)
   ((signed :initarg :signed :reader integer-type-signed)
@@ -98,6 +99,7 @@
    (unit-value :reader type-context-unit-value)
    (pointer-width :initarg :pointer-width :reader type-context-pointer-width)
    (boolean-type :reader type-context-boolean-type)
+   (char-type :reader type-context-char-type)
    (string-type :reader type-context-string-type)
    ;; C's `int` is the platform process-exit representation.  It is distinct
    ;; from pointer-sized ISIZE and remains a signed 32-bit integer on the
@@ -123,6 +125,7 @@
 	  (slot-value context 'unit-value) (make-instance 'unit-value)
 	  (slot-value context 'pointer-width) pointer-width
 	  (slot-value context 'boolean-type) (make-instance 'boolean-type)
+	  (slot-value context 'char-type) (make-instance 'char-type)
 	  (slot-value context 'string-type) (make-instance 'string-type))
     (dolist (specification '((t 8) (t 16) (t 32) (t 64)
 			     (nil 8) (nil 16) (nil 32) (nil 64)))
@@ -540,6 +543,8 @@ the semantic type of a unit expression remains UnitType."
   ((value :initarg :value :reader unit-expression-value)))
 (defclass boolean-literal (semantic-literal)
   ((value :initarg :value :reader boolean-literal-value)))
+(defclass character-literal (semantic-literal)
+  ((value :initarg :value :reader character-literal-value)))
 (defclass integer-literal (semantic-literal)
   ((value :initarg :value :reader integer-literal-value)))
 (defclass float-literal (semantic-literal)
@@ -655,6 +660,7 @@ than recovered later through ad-hoc string comparisons."
 						 :name (make-verona-name name)
 						 :type type))))
       (bind-type "bool" (type-context-boolean-type type-context))
+	  (bind-type "char" (type-context-char-type type-context))
       (bind-type "string" (type-context-string-type type-context))
 	  (bind-type "void" (type-context-void-type type-context))
       (dolist (specification '(("i8" t 8) ("i16" t 16)
@@ -1850,6 +1856,7 @@ type checker."
 	((typep type 'unit-type) "unit")
 	((typep type 'void-type) "void")
 	((typep type 'boolean-type) "bool")
+	((typep type 'char-type) "char")
 	((typep type 'string-type) "string")
 	((typep type 'integer-type)
 	 (format nil "~:[u~;i~]~D" (integer-type-signed type)
@@ -2846,6 +2853,14 @@ therefore visible, while the binding being built cannot see itself."
 	  ((verona-boolean-literal-p datum)
 	   (make-instance 'boolean-literal :syntax syntax :value (verona-boolean-literal-value datum)
 					   :type (type-context-boolean-type context)))
+	  ((characterp datum)
+	   ;; Reader-produced characters are ASCII-only.  Keep this check here too
+	   ;; because macros can manufacture character syntax directly.
+	   (unless (<= (char-code datum) #x7f)
+	     (error 'invalid-expression-error :syntax syntax
+		    :message "character literals are ASCII-only; Unicode characters are not supported yet"))
+	   (make-instance 'character-literal :syntax syntax :value datum
+					     :type (type-context-char-type context)))
 	  ((integerp datum)
 	   (make-instance 'integer-literal :syntax syntax :value datum
 					   :type (type-context-integer-type context t 32)))
@@ -2853,6 +2868,11 @@ therefore visible, while the binding being built cannot see itself."
 	   (make-instance 'float-literal :syntax syntax :value datum
 					 :type (type-context-float-type context 64)))
 	  ((stringp datum)
+	   ;; Reader-produced strings are ASCII-only.  Keep the semantic boundary
+	   ;; just as strict because macros can manufacture string syntax directly.
+	   (unless (every (lambda (character) (<= (char-code character) #x7f)) datum)
+	     (error 'invalid-expression-error :syntax syntax
+		    :message "string literals are ASCII-only; Unicode strings will use #ustring"))
 	   (make-instance 'string-literal :syntax syntax :value datum
 					  :type (type-context-string-type context)))
 	  ((or (verona-name-p datum) (qualified-name-p datum))
@@ -2983,10 +3003,10 @@ therefore visible, while the binding being built cannot see itself."
   "Whether TYPE has a complete backend representation contract.
 
 Defined types retain their declaration identity and may be used behind a
-pointer.  Their layout is a later type-definition concern, so this predicate
-only accepts their semantic identity here; STRING deliberately remains outside
-the primitive model."
-  (cond ((or (typep type 'unit-type) (typep type 'boolean-type)) t)
+pointer.  Their layout is a later type-definition concern.  CHAR is an ASCII
+byte value and STRING is a pointer-plus-byte-length ASCII value."
+  (cond ((or (typep type 'unit-type) (typep type 'boolean-type)
+             (typep type 'char-type) (typep type 'string-type)) t)
 	((typep type 'integer-type) (member (integer-type-width type) '(8 16 32 64)))
 	((typep type 'float-type) (member (float-type-width type) '(32 64)))
 	((typep type 'pointer-type) (or (typep (pointer-type-pointee type) 'void-type)

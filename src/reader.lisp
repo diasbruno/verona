@@ -184,8 +184,46 @@ feature spelling while preserving the language's case-sensitive identifiers."
                                      (#\" (write-char #\" output))
                                      (#\\ (write-char #\\ output))
                                      (otherwise (reader-fail state "unsupported string escape")))))
-                                (t (write-char character output)))))))
+                                (t
+                                 (unless (<= (char-code character) #x7f)
+                                   (reader-fail state
+                                                "string literals are ASCII-only; Unicode strings will use #ustring"
+                                                start))
+                                 (write-char character output)))))))
     value))
+
+(defun read-character-literal (state start)
+  "Read a Common Lisp-style #\\CHARACTER literal.
+
+The source representation deliberately stays a host CHARACTER, just as a
+string literal stays a host string.  Semantic analysis gives it Verona's
+distinct CHAR type later."
+  ;; Consume #\\.  The first character is consumed before looking for a
+  ;; delimiter so spellings such as #\\) and #\\Space work naturally.
+  (reader-advance state)
+  (reader-advance state)
+  (let ((first (reader-peek state)))
+    (when (null first)
+      (reader-fail state "character literal requires one character" start))
+    (let ((text (with-output-to-string (output)
+                  (write-char (reader-advance state) output)
+                  (loop for character = (reader-peek state)
+                        until (verona-delimiter-p character)
+                        do (write-char (reader-advance state) output)))))
+      (let ((character
+              (cond ((= (length text) 1) (char text 0))
+                    ((string-equal text "space") #\Space)
+                    ((string-equal text "newline") #\Newline)
+                    ((string-equal text "tab") #\Tab)
+                    ((string-equal text "return") #\Return)
+                    (t (reader-fail state
+                                    "character literal must name exactly one character"
+                                    start)))))
+        (unless (<= (char-code character) #x7f)
+          (reader-fail state
+                       "character literals are ASCII-only; Unicode characters are not supported yet"
+                       start))
+        character))))
 
 (defun read-list (state start)
   (when (>= (reader-state-nesting-depth state) *reader-nesting-depth-limit*)
@@ -248,7 +286,10 @@ feature spelling while preserving the language's case-sensitive identifiers."
                       (reader-fail state "floating-point literals must start with a digit")
                       (reader-fail state "'.' is not valid Verona syntax; use `unit`" start)))
                  ((char= character #\#)
-                  (return-from read-form (read-feature-conditional state start)))
+                  (if (and (< (1+ start) (length (reader-contents state)))
+                           (char= (char (reader-contents state) (1+ start)) #\\))
+                      (read-character-literal state start)
+                      (return-from read-form (read-feature-conditional state start))))
                  (t (read-atom state start)))))
     (values (make-instance 'syntax
                            :datum datum

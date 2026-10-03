@@ -111,6 +111,21 @@
     (is (search "define i64 @__verona_00006E00006F00006F000070()" ir))
     (is (search "ret i64 0" ir))))
 
+(test lowers-character-and-ascii-string-literals
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(constant greeting string \"hello\")
+                 (function letter () char #\\a)
+                 (function greeting-value () string greeting)"))
+         (backend (verona.backend.llvm:generate-llvm
+                   (compilation-unit-semantic-program unit)))
+         (ir (verona.backend.llvm:print-llvm-module backend)))
+    ;; CHAR is always an ASCII code unit, so a lowers to 97.
+    (is (search "ret i8 97" ir))
+    ;; STRING stores ASCII bytes separately from its byte length.
+    (is (search ".verona.string.1" ir))
+    (is (search "i64 5" ir))))
+
 (test lowers-external-c-declarations-with-explicit-linker-names
   (let* ((unit (compile-string
                 (make-compiler)

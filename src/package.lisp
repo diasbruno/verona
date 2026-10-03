@@ -327,6 +327,8 @@
    #:unit-value
    #:boolean-literal
    #:boolean-literal-value
+   #:character-literal
+   #:character-literal-value
    #:integer-literal
    #:integer-literal-value
    #:float-literal
@@ -464,6 +466,7 @@
    #:void-type
    #:never-type
    #:boolean-type
+   #:char-type
    #:string-type
    #:integer-type
    #:integer-type-signed
@@ -509,6 +512,7 @@
    #:type-context-unit-representation-type
    #:unit-machine-representation
    #:type-context-boolean-type
+   #:type-context-char-type
    #:type-context-string-type
    #:type-context-c-int-type
    #:type-context-integer-type

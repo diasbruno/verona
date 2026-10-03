@@ -63,6 +63,10 @@ The program returns `42`. For smaller runnable examples, including arithmetic,
 bindings, matching, products, sums, generics, and protocols, see
 [`examples/`](examples/) and [its guide](examples/README.md).
 
+Text literals use familiar source syntax: `"hello"` is an immutable ASCII
+`string`, and `#\\a` is a `char` (with named forms such as `#\\space` and
+`#\\newline`).
+
 ## Architecture
 
 The compiler is organized as a reusable front end, an LLVM backend, and a

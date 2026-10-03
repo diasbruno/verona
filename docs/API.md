@@ -48,7 +48,8 @@ linker or archiver.
 | Signed integers | `i8`, `i16`, `i32`, `i64`, and pointer-sized `isize`. |
 | Unsigned integers | `u8`, `u16`, `u32`, `u64`, and pointer-sized `usize`. |
 | Floating point | `f32` and `f64`. |
-| `string` | String type. |
+| `char` | An ASCII code unit, represented as `u8` by the LLVM backend. |
+| `string` | An immutable ASCII string value, represented as a pointer and byte length. |
 | `void` | C ABI-only no-value result type; it is not a Verona value type. |
 | `(pointer TYPE)` | Pointer type. Pointers to `void` or an opaque type cannot be dereferenced. |
 | `(function (TYPE...) RESULT)` | Function type syntax. |
@@ -113,6 +114,12 @@ pointer width (`pointer_32` or `pointer_64`), endianness (`little_endian` or
 ```
 
 ### Expressions and callable operations
+
+String literals use double quotes and accept ASCII only; they support `\\n`, `\\t`,
+`\\"`, and `\\\\`. Unicode strings will use a separate `#ustring"..."` spelling.
+Character literals use Common Lisp spelling: `#\\a`, `#\\space`, `#\\newline`,
+`#\\tab`, and `#\\return`. A character literal denotes exactly one ASCII character;
+the named spellings are case-insensitive. Unicode characters are not supported yet.
 
 | Form or function | Signature / behavior |
 | --- | --- |
@@ -259,7 +266,7 @@ inspect resolved C exports.
 are `type-context-unit-type`, `type-context-void-type`, `type-context-never-type`,
 `type-context-unit-value`, `type-context-pointer-width`,
 `type-context-unit-representation-type`, `type-context-boolean-type`,
-`type-context-string-type`, `type-context-integer-type`,
+`type-context-char-type`, `type-context-string-type`, `type-context-integer-type`,
 `type-context-float-type`, `type-context-pointer-type`,
 `type-context-function-type`, `type-context-defined-type`,
 `type-context-opaque-type`, `type-context-product-type`, and

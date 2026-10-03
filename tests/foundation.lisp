@@ -51,7 +51,7 @@
 		#:primitive-call #:primitive-call-operation #:conversion-expression
 		#:primitive-operation #:primitive-operation-kind #:primitive-operation-parameter-types
 		#:primitive-operation-result-type #:primitive-operation-nan-semantics
-		#:integer-literal #:boolean-literal #:string-literal
+		#:integer-literal #:boolean-literal #:character-literal #:character-literal-value #:string-literal
 		#:sequence-expression #:sequence-expression-expressions
 		#:let-expression #:let-expression-bindings #:let-expression-scope #:let-expression-body
 		#:let-binding #:let-binding-type #:let-binding-initializer
@@ -67,11 +67,12 @@
 		#:parameter-binding #:parameter-binding-type-reference #:parameter-binding-type
 		#:semantic-variable-declaration #:semantic-variable-declaration-type
 		#:semantic-constant-declaration #:semantic-constant-declaration-type
-		#:unit-type #:boolean-type #:integer-type #:integer-type-signed #:integer-type-width
+		#:unit-type #:boolean-type #:char-type #:integer-type #:integer-type-signed #:integer-type-width
 		#:unit-value #:unit-expression #:unit-expression-value
 		#:float-type #:float-type-width #:pointer-type #:pointer-type-target
 		#:function-type #:function-type-parameters #:function-type-result
 		#:make-type-context #:type-context-unit-type #:type-context-unit-value
+		#:type-context-char-type
 		#:type-context-unit-representation-type #:unit-machine-representation
 		#:defined-type #:defined-type-declaration #:opaque-type #:product-type #:product-type-fields
 		#:product-field #:product-field-name #:product-field-type #:product-field-index
@@ -211,6 +212,34 @@
     (is (= 3.14d0 (syntax-datum (fourth forms))))
     (is (string= "hello" (syntax-datum (fifth forms))))
     (is (unit-literal-p (syntax-datum (sixth forms))))))
+
+(test reads-common-lisp-style-character-literals
+  (let ((forms (read-source (make-source "characters.vrn" "#\\a #\\space #\\newline #\\)"))))
+    (is (= 4 (length forms)))
+    (is (char= #\a (syntax-datum (first forms))))
+    (is (char= #\Space (syntax-datum (second forms))))
+    (is (char= #\Newline (syntax-datum (third forms))))
+    (is (char= #\) (syntax-datum (fourth forms)))))
+  (signals verona-read-error
+    (read-source (make-source "characters.vrn" "#\\ab")))
+  (signals verona-read-error
+    (read-source (make-source "characters.vrn" "#\\λ")))
+  (signals verona-read-error
+    (read-source (make-source "strings.vrn" "\"λ\""))))
+
+(test resolves-character-and-string-literals
+  (let* ((unit (compile-string
+                (make-compiler)
+                "(function letter () char #\\a) (function greeting () string \"hello\")"))
+         (program (compilation-unit-semantic-program unit))
+         (letter (semantic-program-declaration program (first (unit-declarations unit))))
+         (greeting (semantic-program-declaration program (second (unit-declarations unit))))
+         (context (semantic-program-type-context program)))
+    (is (typep (semantic-function-declaration-body letter) 'character-literal))
+    (is (char= #\a (character-literal-value (semantic-function-declaration-body letter))))
+    (is (eq (type-context-char-type context)
+            (semantic-function-declaration-return-type letter)))
+    (is (typep (semantic-function-declaration-body greeting) 'string-literal))))
 
 (test reads-nested-lists-with-spans
   (let* ((source (make-source "nested.vrn" (format nil "(foo~%  (bar 10)~%  baz)")))
